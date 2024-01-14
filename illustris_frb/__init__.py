@@ -61,7 +61,7 @@ class simulation:
 class frb_simulation(simulation):
     
     def __init__(self, name, binsize, origin=np.array([0,0,0]), sim_dir=None, map_dir=None, max_z=2):
-        simulation.__init__(self, name, sim_dir, map_dir)
+        simulation.__init__(self, name, binsize, sim_dir, map_dir)
         self.origin=origin
         
         self.snap_xs, self.snap_zs = self.get_snapshot_dists()
@@ -92,11 +92,8 @@ class frb_simulation(simulation):
             offset = self.boxsize * sim_box_gridcoords[box_idx] #offset sim box coordinates
             next_pos = sim_box_edges[box_idx]
 
-            current_pos -= offset
-            next_pos -= offset
-
-            bin_edges, bin_edge_dists, bin_gridcoords = get_box_crossings(next_pos, current_pos, self.binsize)
-            # print(bin_gridcoords[0], bin_gridcoords[-1])
+            bin_edges, bin_edge_dists, bin_gridcoords = get_box_crossings(next_pos-offset, current_pos-offset, self.binsize)
+            # print(box_idx, bin_gridcoords[0], bin_gridcoords[-1])
             bin_edge_dists += traveled_dist
             bin_mid_dists = np.convolve( np.insert(bin_edge_dists, 0, traveled_dist), [0.5, 0.5], 'valid' )
 
@@ -137,3 +134,4 @@ class frb_simulation(simulation):
         
         x_edge_dists, xs, nes = self.ray_trace(dest)
         return self.compute_DM(x_edge_dists, xs, nes, cumulative)
+
