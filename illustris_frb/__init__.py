@@ -9,6 +9,7 @@ import astropy.cosmology.units as cu
 import astropy.constants as const
 
 from scipy.interpolate import interp1d
+from math import lcm
 
 from .utils import get_box_crossings
 
@@ -130,6 +131,26 @@ class frb_simulation(simulation):
         dist_vals = self.cosmo.comoving_distance(redshift_vals).to(
             u.kpc/cu.littleh, self.h_equiv).value
         self.z_from_dist = interp1d(dist_vals, redshift_vals)
+    
+    def check_goodness(self, dest):
+        
+        dvec = np.abs(dest - self.origin)
+        max_dim = np.argmax(dvec)
+        scaled_dvec = dvec/dvec[max_dim]
+        
+        periods = []
+        for i in range(3):
+            if i==max_dim:
+                continue
+            intersections = (scaled_dvec[i] * np.arange(1,self.n_bins+1))%1
+            periods.append(np.argmax((intersections < 1/self.n_bins) | (intersections > 1-1/self.n_bins)) + 1)
+        
+        period = lcm(*periods)
+        if dvec[max_dim] > period*self.boxsize:
+            return False
+        else:
+            return True
+
     
     def ray_trace(self, dest):
         """
