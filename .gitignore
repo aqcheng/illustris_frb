@@ -1,4 +1,8 @@
 n_e_maps/
+data/
+logs/
+old_scripts/
+skeleton_notebooks/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
