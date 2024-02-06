@@ -4,7 +4,7 @@ from math import floor, ceil
 
 def integers_between(a, b):
     """
-    Computes all integers between `a` and `b`.
+    Computes all integers on [a, b).
     """
     
     if a < b:
@@ -12,6 +12,13 @@ def integers_between(a, b):
     else:
         return np.arange(ceil(a)-1, ceil(b)-1, -1)
 
+def index_to_coord(index, n_bins):
+    
+    res = np.zeros(3, dtype=int)
+    for i in range(3):
+        q, index = divmod(index, n_bins**(2-i))
+        res[i] = q
+    return res.astype(int)
 
 def get_box_crossings(dest, origin, boxsize): 
     """
@@ -53,3 +60,14 @@ def get_box_crossings(dest, origin, boxsize):
     all_box_gridcoords = (all_midpoints // boxsize).astype(int)
 
     return all_edges, all_edge_dists, all_box_gridcoords
+
+def unit_sphere(N):
+    pts = np.random.normal(size=(N, 3))
+    norms = norm(pts, axis=1)
+    mask = norms.nonzero()
+    return pts[mask] / np.atleast_2d(norms[mask]).T
+
+def is_within_cone(theta, phi, theta_0, phi_0, conesize):
+    #from spherical law of cosines
+    return np.arccos(np.cos(theta_0)*np.cos(theta) + 
+                     np.sin(theta_0)*np.sin(theta)*np.cos(phi-phi_0)) < conesize
