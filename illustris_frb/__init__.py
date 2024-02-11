@@ -2,7 +2,7 @@ import os
 import numpy as np
 import h5py
 import pandas as pd
-from healpy import ang2vec
+import healpy as hp
 
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
@@ -23,7 +23,8 @@ class simulation:
     files, and cosmology.
     """
     
-    def __init__(self, name, binsize=500, sim_dir=None, map_dir=None, max_z=2):
+    def __init__(self, name, binsize=500, sim_dir=None, 
+                 emap_dir='./data/n_e_maps', max_z=2):
         """
         Parameters
         ----------
@@ -36,8 +37,8 @@ class simulation:
         sim_dir: str, optional
             Directory to simulation snapshot files. Defaults to the path on
             Illustris JupyterHub.
-        map_dir: str, optional
-            Directory to electron density map. Defaults to './n_e_maps/{name}'
+        emap_dir: str, optional
+            Directory to electron density map. Defaults to './data/n_e_maps'
         max_z: float, optional
             The maximum redshift out to which FRBs will be simulated. Used
             only for creating the z(x) interpolant. Default: 2
@@ -51,10 +52,7 @@ class simulation:
             self.sim_dir = f'/home/tnguser/sims.TNG/{name}/output'
         else:
             self.sim_dir = sim_dir
-        if map_dir is None:
-            self.map_dir = f'n_e_maps/{name}'
-        else:
-            self.map_dir = map_dir
+        self.emap_dir = emap_dir
         
         #get simulation attributes
         with h5py.File(self.get_snap_chunk_path(99)) as f:
@@ -68,7 +66,7 @@ class simulation:
         self.Omega0 = header['Omega0']
 
         self.cosmo = FlatLambdaCDM(H0=100*self.h, Om0=self.Omega0)
-        self.h_equiv = cu.with_H0(self.cosmo.H0)
+        # self.h_equiv = cu.with_H0(self.cosmo.H0)
 
     def get_snapdir_path(self, snap):
         return os.path.join(self.sim_dir, f'snapdir_{snap:03}')
@@ -85,21 +83,25 @@ class simulation:
                             f'fof_subhalo_tab_{snap:03}.{chunk}.hdf5')
     
     def get_map_path(self, snap):
-        return os.path.join(self.map_dir, f'{snap}.npy')
+        return os.path.join(self.emap_dir, f'{snap}.npy')
     
     def comoving_distance(self, z):
-        return self.cosmo.comoving_distance(z).to(u.kpc/cu.littleh, 
-                                                  self.h_equiv).value
+        return self.cosmo.comoving_distance(z).to(u.kpc).value * self.h
     
     def get_max_dist(self, thetas, phis): 
     
-        dvecs = np.sort(np.abs(np.atleast_2d(ang2vec(thetas,phis))))
+        dvecs = np.sort(np.abs(np.atleast_2d(hp.ang2vec(thetas,phis))))
         scaled_dvecs = (dvecs.T / dvecs[:, -1]).T #(N, 2) arr
 
         periods = []
         for col in range(2):
-            intersections = np.tensordot(np.arange(1, self.n_bins+1), scaled_dvecs[:, col], 0) % 1 #(n_bins, N) arr
-            periods.append( np.argmax((intersections < 1/self.n_bins) | (intersections > 1-1/self.n_bins) , axis=0) + 1 )
+            intersections = np.tensordot(np.arange(1, self.n_bins+1), 
+                                         scaled_dvecs[:, col], 0) % 1 
+                                         #(n_bins, N) arr
+            periods.append( np.argmax(
+                (intersections < 1/self.n_bins) | \
+                (intersections > 1-1/self.n_bins), axis=0
+            ) + 1 )
 
         period = np.lcm(*periods)
 
@@ -127,6 +129,14 @@ class simulation:
         snap_zs = np.array(snap_zs)
         self.snap_zs = snap_zs
         return self.comoving_distance(snap_zs)
+    
+    @cached_property
+    def snap_x_lims(self):
+        """
+        Compute the upper limit of comoving distances of each snapshot via 
+        linear interpolation of each snapshot's redshift.
+        """
+        return np.insert(np.convolve(self.snap_xs, [0.5,0.5], 'valid'), 99, 0) 
     
     @cached_property
     def z_from_dist(self):
@@ -162,8 +172,9 @@ class simulation:
     
 class frb_simulation(simulation):
     """
-    A class for ray tracing to FRBs in IllustrisTNG from a specified origin. 
-    Inherits from the simulation class. 
+    A class for ray tracing to FRBs in IllustrisTNG from a specified origin,
+    as well as getting foreground galaxy counts. Inherits from the simulation 
+    class. 
     """
     
     def __init__(
@@ -172,7 +183,7 @@ class frb_simulation(simulation):
         binsize=500,
         origin=np.array([0,0,0]), 
         sim_dir=None, 
-        map_dir=None, 
+        emap_dir='./data/n_e_maps',
         max_z=2
     ):
         """
@@ -180,39 +191,35 @@ class frb_simulation(simulation):
         ----------
         origin: (3,) array
             The coordinates of the observer in the simulation.
-        
         """
         
-        super().__init__(name, binsize, sim_dir, map_dir, max_z)
-        self.origin=origin
-    
-#     def ang2loc(self, thetas, phis, r=1):
-#         return self.origin + r*pf.ang2vec(thetas, phis)
-    
-#     def loc2ang(self, vecs):
-#         return np.hstack(pf.v2ang(vecs-self.origin))
+        super().__init__(name, binsize, sim_dir, emap_dir, max_z)
+        self.origin=np.asarray(origin)
 
-#     def check_validity(self, dests, ang=False): 
-        
-#         if ang:
-#             dests = self.ang2loc(dests) # convert to location coordinates
-#         dvecs = np.sort(np.abs(np.atleast_2d(dests) - self.origin))
-#         scaled_dvecs = dvecs / dvecs[:, -1] #(N, 2) arr
-        
-#         periods = []
-#         for col in range(2):
-#             intersections = np.tensordot(np.arange(1,self.n_bins+1), scaled_dvecs[:, col], 0) % 1 #(n_bins, N) arr
-#             periods.append( np.argmax((intersections < 1/self.n_bins) | (intersections > 1-1/self.n_bins) , axis=0) + 1 )
-        
-#         period = np.lcm(*periods)
-        
-#         if ang: #return max distance if input given in angular coordinates
-#             return period * self.boxsize / dvecs[:,-1]
-        
-#         res = (dvecs[:, -1] <= period*self.boxsize)
-#         if len(res) == 1:
-#             return res[0]
-#         return res
+    def check_validity(self, dests, ang=False): 
+        """
+        Currently depreciated.
+        """
+
+        if ang:
+            dests = self.ang2loc(dests) # convert to location coordinates
+        dvecs = np.sort(np.abs(np.atleast_2d(dests) - self.origin))
+        scaled_dvecs = dvecs / dvecs[:, -1] #(N, 2) arr
+
+        periods = []
+        for col in range(2):
+            intersections = np.tensordot(np.arange(1,self.n_bins+1), scaled_dvecs[:, col], 0) % 1 #(n_bins, N) arr
+            periods.append( np.argmax((intersections < 1/self.n_bins) | (intersections > 1-1/self.n_bins) , axis=0) + 1 )
+
+        period = np.lcm(*periods)
+
+        if ang: #return max distance if input given in angular coordinates
+            return period * self.boxsize / dvecs[:,-1]
+
+        res = (dvecs[:, -1] <= period*self.boxsize)
+        if len(res) == 1:
+            return res[0]
+        return res
     
     def ray_trace(self, dest):
         """
@@ -231,7 +238,8 @@ class frb_simulation(simulation):
             An array containing the electron number density $n_e$ in each bin,
             in (ckpc/h)^{-3}.
         """
-    
+        dest = np.asarray(dest)
+                         
         x_edge_dists = [0] #edge distances: for riemann integration
         xs = [] #bin midpoints, for calculating redshift, n_e(x), etc.
         nes = [] #electron density in (ckpc/h)**-3
@@ -291,11 +299,11 @@ class frb_simulation(simulation):
         $\mathrm{DM} = \int n_e(x)(1+z(x))\,dx$
         """
     
-        nes = (nes * (u.kpc/cu.littleh)**(-3)).to(u.cm**(-3), self.h_equiv)
+        nes = (nes * (u.kpc/self.h)**(-3)).to(u.cm**(-3))
         zs = self.z_from_dist(xs)
 
         y = nes * (1 + zs) 
-        dx = np.diff((x_edge_dists * u.kpc/cu.littleh).to(u.pc, self.h_equiv))
+        dx = np.diff((x_edge_dists/self.h * u.kpc).to(u.pc))
 
         if cumulative:
             return np.flip(x_edge_dists[-1]-xs)*u.kpc/cu.littleh, \

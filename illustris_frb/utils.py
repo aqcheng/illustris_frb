@@ -20,6 +20,31 @@ def index_to_coord(index, n_bins):
         res[i] = q
     return res.astype(int)
 
+# def unpack_lims(lims, res):
+#     x_min = lims[0][0]
+#     x_max = lims[0][1]
+#     y_min = lims[1][0]
+#     y_max = lims[1][1]
+    
+#     n2 = int((x_max-x_min)/res) * int((y_max-y_min)/res)
+    
+#     return x_min, x_max, y_min, y_max, n2
+
+# def coord2flatpix(x, y, lims, res, scale=1): 
+#     #assumes positive integer res and bin edges --> use scale
+#     #input x and y must be between these limits
+    
+#     lims_ = (np.asarray(lims)*scale).astype(int)
+#     res_ = int(res*scale)
+    
+#     x_min, x_max, y_min, y_max, n2 = unpack_lims(lims_, res_)
+    
+#     n2 = (x_max-x_min)//res_ 
+    
+#     return ((x*scale - x_min)//(res_))**n2 + \
+#            ((y*scale - y_min)//(res_))
+    
+
 def get_box_crossings(dest, origin, boxsize): 
     """
     Given a ray traveling between two points, finds the intersection points of
@@ -35,6 +60,8 @@ def get_box_crossings(dest, origin, boxsize):
     all_box_gridcoords: (N,3) array
         The list of the grid coordinates of the bins that the ray travels through.
     """
+    dest = np.asarray(dest)
+    origin = np.asarray(origin)
     
     edges_list = [dest]
     edge_dists_list = [norm(np.atleast_2d(dest-origin), axis=1)]
