@@ -26,8 +26,8 @@ theta and phi. A general rectangular region would rotate the system.
 
 #inputs
 sim = simulation('L205n2500TNG')
-galaxy_mapdir = '/home/tnguser/frb_project/data/g_maps'
-outpath = '/home/tnguser/frb_project/data/g_cats/test_flat.hdf5'
+galaxy_mapdir = '/data/submit/submit-illustris/april/data/g_maps'
+outpath = '/data/submit/submit-illustris/april/data/g_cats/test_flat'
 if not os.path.isdir(outpath):
     os.makedirs(outpath)
 origin= sim.binsize * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
