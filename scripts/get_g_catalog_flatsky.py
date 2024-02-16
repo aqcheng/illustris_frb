@@ -5,7 +5,7 @@ import pandas as pd
 from healpy import ang2vec, vec2ang
 
 from illustris_frb import simulation
-from illustris_frb.utils import get_box_crossings, coord2flatpix
+from illustris_frb.utils import get_box_crossings
 import time
 
 """
@@ -25,9 +25,9 @@ theta and phi. A general rectangular region would rotate the system.
 """
 
 #inputs
-sim = simulation('L205n2500TNG')
-galaxy_mapdir = '/data/submit/submit-illustris/april/data/g_maps'
-outpath = '/data/submit/submit-illustris/april/data/g_cats/test_flat'
+sim = simulation('L205n2500TNG', 
+                 gmap_dir = '/home/tnguser/frb_project/data/g_maps')
+outpath = '/home/tnguser/frb_project/data/g_cats/test_flat'
 if not os.path.isdir(outpath):
     os.makedirs(outpath)
 origin= sim.binsize * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
@@ -43,9 +43,6 @@ phi_max = 0.19
 def simple_mask(theta, phi, theta_min, theta_max, phi_min, phi_max):
     #rotation not implemented
     return (theta > theta_min) & (theta < theta_max) & (phi > phi_min) & (phi < phi_max)
-
-def get_galaxy_map_path(snap):
-    return os.path.join(galaxy_mapdir, f'{snap}_galaxies.hdf5')
 
 def get_shell_boxes(origin, r_min, r_max, checkpoints, boxsize):
     
@@ -87,7 +84,7 @@ def get_cone_shell(sim, snap, origin, outpath, checkpoints, in_region, kwargs=No
     print(f'{"":<8}{nbox} periodic box(es) found')
     
     columns = ['x', 'y', 'z'] + columns
-    data = np.array(pd.read_hdf(get_galaxy_map_path(snap))[ columns ])
+    data = np.array(pd.read_hdf(sim.get_gmap_path(snap))[ columns ])
     
     res = []
     thetas = []
@@ -136,6 +133,6 @@ start = time.time()
 for snap in range(99, final_snap, -1):
     print(f'{time.time()-start:<6.0f}: Working on snapshot {snap}')
     get_cone_shell(sim, snap, origin, outpath, checkpoints, simple_mask, kwargs=mask_kwargs)
-print(f'{time.time()-start:<6.0f}: Working on snapshot 72')
+print(f'{time.time()-start:<6.0f}: Working on snapshot {final_snap}')
 get_cone_shell(sim, final_snap, origin, outpath, checkpoints, simple_mask, kwargs=mask_kwargs, max_z=max_z)
 print(f'{time.time()-start:<6.0f}: Done')

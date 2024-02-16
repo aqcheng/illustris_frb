@@ -23,7 +23,8 @@ class simulation:
     
     def __init__(self, name, binsize=500, sim_dir=None, 
                  header_file='/data/submit/submit-illustris/april/data/L205n2500TNG_header.pickle',
-                 emap_dir='./data/n_e_maps', max_z=2):
+                 emap_dir='./data/n_e_maps', gmap_dir='./data/g_maps', 
+                 max_z=2):
         """
         Parameters
         ----------
@@ -41,6 +42,8 @@ class simulation:
             the header directly from the simulation, use header_file=None.
         emap_dir: str, optional
             Directory to electron density map. Defaults to './data/n_e_maps'
+        gmap_dir: str, optional
+            Directory to galaxy map. Defaults to './data/g_maps'
         max_z: float, optional
             The maximum redshift out to which FRBs will be simulated. Used
             only for creating the z(x) interpolant. Default: 2
@@ -55,6 +58,7 @@ class simulation:
         else:
             self.sim_dir = sim_dir
         self.emap_dir = emap_dir
+        self.gmap_dir = gmap_dir
         
         if (header_file is None) or (not os.path.exists(str(header_file))):
             with h5py.File(self.get_snap_chunk_path(99)) as f:
@@ -87,8 +91,11 @@ class simulation:
         return os.path.join(self.sim_dir, f'groups_{snap:03}', 
                             f'fof_subhalo_tab_{snap:03}.{chunk}.hdf5')
     
-    def get_map_path(self, snap):
+    def get_emap_path(self, snap):
         return os.path.join(self.emap_dir, f'{snap}.npy')
+    
+    def get_gmap_path(self, snap):
+        return os.path.join(self.gmap_dir, f'{snap}_galaxies.hdf5')
     
     def comoving_distance(self, z):
         return self.cosmo.comoving_distance(z).to(u.kpc).value * self.h
@@ -177,9 +184,8 @@ class simulation:
     
 class frb_simulation(simulation):
     """
-    A class for ray tracing to FRBs in IllustrisTNG from a specified origin,
-    as well as getting foreground galaxy counts. Inherits from the simulation 
-    class. 
+    A class for ray tracing to FRBs in IllustrisTNG from a specified origin.
+    Inherits from the simulation class. 
     """
     
     def __init__(
@@ -258,7 +264,7 @@ class frb_simulation(simulation):
         traveled_dist = 0
 
         open_snap = 99
-        open_map = np.load(self.get_map_path(99))
+        open_map = np.load(self.get_emap_path(99))
 
         for box_idx in range(len(sim_box_edges)):
 
@@ -286,7 +292,7 @@ class frb_simulation(simulation):
                 #if corresponding snapshot is not open, open it
                 if snap != open_snap: 
                     open_snap = snap
-                    open_map = np.load(self.get_map_path(snap))
+                    open_map = np.load(self.get_emap_path(snap))
 
                 x_edge_dists.append(bin_edge_dists[bidx])
                 xs.append(bin_mid_dists[bidx])
