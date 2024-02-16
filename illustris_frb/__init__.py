@@ -1,16 +1,14 @@
 import os
 import numpy as np
 import h5py
-import pandas as pd
 import healpy as hp
+import pickle
 
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
 import astropy.cosmology.units as cu
-import astropy.constants as const
 
 from scipy.interpolate import interp1d
-from math import lcm
 
 from functools import cached_property
 
@@ -24,6 +22,7 @@ class simulation:
     """
     
     def __init__(self, name, binsize=500, sim_dir=None, 
+                 header_file='/data/submit/submit-illustris/april/data/L205n2500TNG_header.pickle',
                  emap_dir='./data/n_e_maps', max_z=2):
         """
         Parameters
@@ -37,6 +36,9 @@ class simulation:
         sim_dir: str, optional
             Directory to simulation snapshot files. Defaults to the path on
             Illustris JupyterHub.
+        header_file: str, optional
+            Path to a .json file that has the simulation attributes. To read
+            the header directly from the simulation, use header_file=None.
         emap_dir: str, optional
             Directory to electron density map. Defaults to './data/n_e_maps'
         max_z: float, optional
@@ -54,16 +56,19 @@ class simulation:
             self.sim_dir = sim_dir
         self.emap_dir = emap_dir
         
-        #get simulation attributes
-        with h5py.File(self.get_snap_chunk_path(99)) as f:
-            header = dict(f['Header'].attrs)
+        if (header_file is None) or (not os.path.exists(str(header_file))):
+            with h5py.File(self.get_snap_chunk_path(99)) as f:
+                self.header = dict(f['Header'].attrs)
+        else:
+            with open(header_file) as f:
+                self.header = pickle.load(f)
 
-        self.boxsize = int(header['BoxSize'])
+        self.boxsize = int(self.header['BoxSize'])
         self.binsize = binsize
         self.n_bins = int(self.boxsize / self.binsize)
         
-        self.h = header['HubbleParam']
-        self.Omega0 = header['Omega0']
+        self.h = self.header['HubbleParam']
+        self.Omega0 = self.header['Omega0']
 
         self.cosmo = FlatLambdaCDM(H0=100*self.h, Om0=self.Omega0)
         # self.h_equiv = cu.with_H0(self.cosmo.H0)
