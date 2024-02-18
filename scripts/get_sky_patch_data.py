@@ -24,7 +24,7 @@ nproc = int(total_mem // mem_per_FRB)
 
 nside=128
 gcat_path = '/home/tnguser/frb_project/data/g_cats/test' #where
-outpath = '/home/tnguser/frb_project/data/test_nside{nside}.hdf5'
+outpath = f'/home/tnguser/frb_project/data/test_nside{nside}.hdf5'
 
 binsize = 500
 origin = binsize * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
@@ -32,17 +32,18 @@ z = 0.4 # place galaxies at z=0.4
 sim = frb_simulation('L205n2500TNG', origin=origin, max_z=z)
 x = sim.comoving_distance(z)
 
-#see get_good_pixels.ipynb
+# see get_good_pixels.ipynb
 pixels = np.load(f'/home/tnguser/frb_project/data/g_cats/test_pixels_nside{nside}.npy')
 checkpixels = np.array([90370, 90894, 105730, 105742])
 N = len(pixels)
 
-## get FRB DMs, one FRB per pixel
-pixel_coords = x * np.vstack(hp.pix2vec(nside, pixels)).T
-pool = mp.Pool(processes=nproc)
-DM_arr = pool.map(sim.get_frb_DM, pixel_coords)
+# ## get FRB DMs, one FRB per pixel
+# pixel_coords = x * np.vstack(hp.pix2vec(nside, pixels)).T
+# pool = mp.Pool(processes=nproc)
+# DM_arr = pool.map(sim.get_frb_DM, pixel_coords)
 
-df = pd.DataFrame({'DM': [dm.value for dm in DM_arr]}, index=pixels)
+# df = pd.DataFrame({'DM': [dm.value for dm in DM_arr]}, index=pixels)
+df = pd.read_hdf(outpath)
 
 ## get foreground galaxy count
 df['N_g']=0
@@ -50,9 +51,10 @@ for fn in os.listdir(gcat_path):
     if '.hdf5' in fn:
         tmp = pd.read_hdf(os.path.join(gcat_path, fn))
         unique, counts = np.unique(tmp['ipix'], return_counts=True)
-        df.loc[unique]['N_g'] += counts #idk if this actually works
+        df.loc[unique, 'N_g'] += counts #idk if this actually works
 
 # save results
+os.remove(outpath)
 df.to_hdf(outpath, key='data')
 
 #archive:
