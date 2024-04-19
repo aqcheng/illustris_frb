@@ -23,12 +23,13 @@ arr[i_x*n_y + i_y] = arr_2d[i_x][i_y]
 ## --- INPUTS ---
 
 mem_per_FRB = 1.5 #Gb
-total_mem = 10 #Gb
+total_mem = 75 #Gb
 nproc = int(total_mem // mem_per_FRB)
 
 gcat_path = '/home/tnguser/frb_project/data/g_cats/test_flat' #where
-outpath = '/home/tnguser/frb_project/data/test_flat_res001.hdf5'
+outpath = '/home/tnguser/frb_project/data/results/test_flat_res001.hdf5'
 
+name = 'L205n2500TNG'
 binsize = 500
 origin = binsize * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
 z = 0.4 # place galaxies at z=0.4
@@ -39,11 +40,11 @@ phi_min = 0.01
 phi_max = 0.19 #see get_good_pixels.ipynb
 #.18 x .18 rad region
 
-res = 0.01 #324 FRBs
+res = 0.001 #32400 FRBs
 
 ## --- END OF INPUTS ---
 
-sim = frb_simulation('L205n2500TNG', origin=origin, max_z=z)
+sim = frb_simulation(name, binsize=binsize, origin=origin, max_z=z)
 x = sim.comoving_distance(z)
 
 theta_grid = np.arange(theta_min, theta_max+res/2, res)
@@ -53,7 +54,7 @@ n_y = len(phi_grid)-1
 N = n_x * n_y
 
 pix_angs = np.array(np.meshgrid(theta_grid[:-1]+res/2, 
-                                phi_grid[:-1]+res/2)).T.reshape(N,2)
+                                phi_grid[:-1]+res/2)).T.reshape(N,2) #bin centers
 pix_vecs = x * hp.ang2vec(pix_angs[:,0], pix_angs[:,1])
 
 
