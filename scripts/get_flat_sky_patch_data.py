@@ -32,7 +32,7 @@ outpath = '/home/tnguser/frb_project/data/results/test_flat_res001.hdf5'
 name = 'L205n2500TNG'
 binsize = 500
 origin = binsize * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
-z = 0.4 # place galaxies at z=0.4
+z = 0.4 # place FRBs at z=0.4
 
 theta_min = np.pi/2 - 0.09
 theta_max = np.pi/2 + 0.09
