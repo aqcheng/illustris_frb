@@ -1,8 +1,7 @@
-n_e_maps/
 data/
+figures/
 logs/
-old_scripts/
-skeleton_notebooks/
+*submit*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

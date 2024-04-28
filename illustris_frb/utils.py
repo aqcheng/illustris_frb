@@ -1,6 +1,6 @@
 import numpy as np
 from numpy.linalg import norm
-from math import floor, ceil
+from scipy.linalg import expm
 
 def integers_between(a, b):
     """
@@ -8,9 +8,9 @@ def integers_between(a, b):
     """
     
     if a < b:
-        return np.arange(floor(a)+1, floor(b)+1)
+        return np.arange(np.floor(a)+1, np.floor(b)+1)
     else:
-        return np.arange(ceil(a)-1, ceil(b)-1, -1)
+        return np.arange(np.ceil(a)-1, np.ceil(b)-1, -1)
 
 def index_to_coord(index, n_bins):
     
@@ -74,19 +74,43 @@ def is_within_cone(theta, phi, theta_0, phi_0, conesize):
     return np.arccos(np.cos(theta_0)*np.cos(theta) + 
                      np.sin(theta_0)*np.sin(theta)*np.cos(phi-phi_0)) < conesize
 
-def rotate(theta1, phi1, dtheta, dphi):
+def Rodrigues(k, theta):
     """
-    Converts between two spherical coordinate systems, (theta0, phi0) and
-    (theta1, phi1). The forward transformation (0 to 1) occurs by rotating
-    azimuthally by -dphi, then transforming into a system with a pole at 
-    (dtheta, np.pi/2).
+    Uses the Rodrigues' rotation formula to return the rotation matrix for
+    rotating a vector by an angle theta about an axis specified by unit 
+    vector k.
     """
+    K = np.cross(np.eye(3), k)
+    return expm(K*theta)
 
-    theta0 = np.arccos( np.cos(theta1)*np.cos(dtheta) - np.sin(theta1)*np.sin(dtheta)*np.sin(phi1) )
-    phi0 = np.arccos( np.sin(theta1)*np.cos(phi1) / np.sin(theta0) ) * \
-           np.sign( ( np.cos(theta1)*np.sin(dtheta) + np.sin(theta1)*np.cos(dtheta)*np.sin(phi1) ) / np.cos(theta0) )
 
-    return theta0, np.mod(phi0+dphi, 2*np.pi)
+# def rotate_to_0(theta1, phi1, dtheta, dphi):
+#     """
+#     Converts between two spherical coordinate systems, (theta0, phi0) and
+#     (theta1, phi1). The forward transformation (0 to 1) occurs by rotating
+#     azimuthally by -dphi, then transforming into a system with a pole at 
+#     (dtheta, np.pi/2). This function is the backwards transformation.
+#     """
+
+#     theta0 = np.arccos( np.cos(theta1)*np.cos(dtheta) - np.sin(theta1)*np.sin(dtheta)*np.sin(phi1) )
+#     phi0 = np.arccos( np.sin(theta1)*np.cos(phi1) / np.sin(theta0) ) * \
+#            np.sign( ( np.cos(theta1)*np.sin(dtheta) + np.sin(theta1)*np.cos(dtheta)*np.sin(phi1) ) / np.cos(theta0) )
+
+#     return theta0, np.mod(phi0+dphi, 2*np.pi)
+
+# def rotate_to_1(theta0, phi0, dtheta, dphi):
+#     """
+#     Converts between two spherical coordinate systems, (theta0, phi0) and
+#     (theta1, phi1). The forward transformation (0 to 1) occurs by rotating
+#     azimuthally by -dphi, then transforming into a system with a pole at 
+#     (dtheta, np.pi/2). This function is the forwards transformation.
+#     """
+
+#     theta1 = np.arccos( np.cos(theta0)*np.cos(dtheta) + np.sin(theta0)*np.sin(dtheta)*np.sin(phi0-dphi) )
+#     phi1 = np.arccos( np.sin(theta0)*np.cos(phi0-dphi) / np.sin(theta1) ) * \
+#            np.sign( ( -np.cos(theta0)*np.sin(dtheta) + np.sin(theta0)*np.cos(dtheta)*np.sin(phi0-dphi) ) / np.cos(theta1) )
+
+#     return theta1, np.mod(phi1, 2*np.pi)
 
 # def unpack_lims(lims, res):
 #     x_min = lims[0][0]
@@ -118,7 +142,7 @@ def rotate(theta1, phi1, dtheta, dphi):
 #     X, Y, Z = u
 #     stepX, stepY, stepZ = np.sign(v)
 #     tDeltaX, tDeltaY, tDeltaZ = np.abs(norm(v)/v)
-#     tMaxX, tMaxY, tMaxZ = np.abs(((np.floor(u*np.sign(v))+1)*np.sign(v) - u)*tDelta)
+#     tMaxX, tMaxY, tMaxZ = np.abs(((np.np.floor(u*np.sign(v))+1)*np.sign(v) - u)*tDelta)
 
 #     t = 0
 #     res = []

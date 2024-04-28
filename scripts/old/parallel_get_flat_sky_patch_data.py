@@ -20,16 +20,14 @@ number counts and to concatenate the DMs together.
 ## --- INPUTS ---
 
 mem_per_FRB = 1.5 #Gb
-total_mem = 10 #Gb
-nproc = int(total_mem // mem_per_FRB)
+nproc = 8
 
-gcat_path = '/data/submit/submit-illustris/april/data/g_cats/test_flat' 
-outdir = '/work/submit/aqc/test_flat_res0001' #these will be concatenated later
+outdir = '/work/submit/aqc/debugcone_z01' #these will be concatenated later
 
-name = 'L205n2500TNG'
-binsize = 500
-origin = binsize * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
+origin = 500 * np.array([50, 70, 23]) # same origin as in DM_redshift.ipynb
 z = 0.4 # place galaxies at z=0.4
+# xrange = (540567.881612, 625366.418720) #snapshots 84 and 85, z=0.4
+xrange = (0, 305925.921607) #snapshots 99-91, up to z=0.1
 
 theta_min = np.pi/2 - 0.09
 theta_max = np.pi/2 + 0.09
@@ -47,12 +45,10 @@ argp.add_argument("-N", type=int, required=True, help="Total # of partitions. Sh
 argp.add_argument("-n", type=int, required=True, help="Partition number; must be between 1 and N. Required if N specified.")
 args = argp.parse_args()
 
-
-
 if not os.path.isdir(outdir):
     os.makedirs(outdir)
 
-sim = frb_simulation(name, binsize=binsize, origin=origin, max_z=z)
+sim = frb_simulation(origin=origin)
 x = sim.comoving_distance(z)
 
 nrows_tot = int((theta_max - theta_min)/res)
@@ -67,11 +63,14 @@ n_y = len(phi_grid)
 N = n_x * n_y
 
 pix_angs = np.array(np.meshgrid(theta_grid, phi_grid)).T.reshape(N,2)
-pix_vecs = x * hp.ang2vec(pix_angs[:,0], pix_angs[:,1])
+pix_vecs = origin + x * hp.ang2vec(pix_angs[:,0], pix_angs[:,1])
+
+def wrapper(dest):
+    return sim.get_frb_DM(dest, xrange=xrange)
 
 ## get FRB DMs, one FRB per pixel
 pool = mp.Pool(processes=nproc)
-DM_arr = pool.map(sim.get_frb_DM, pix_vecs) 
+DM_arr = pool.map(wrapper, pix_vecs) 
 
 ## save results
 outf = os.path.join(outdir, f'{args.n}.npy')

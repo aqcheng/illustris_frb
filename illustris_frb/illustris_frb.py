@@ -1,11 +1,11 @@
 import os
 import numpy as np
+from numpy.linalg import norm
 import h5py
 import healpy as hp
 
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
-import astropy.cosmology.units as cu
 
 from scipy.interpolate import interp1d
 from functools import cached_property
@@ -22,8 +22,7 @@ class simulation:
                  header_file='/data/submit/submit-illustris/april/data/header_info/L205n2500TNG_header.hdf5',
                  snap_zs_file = '/data/submit/submit-illustris/april/data/header_info/snap_zs.npy', 
                  emap_dir='/data/submit/submit-illustris/april/data/n_e_maps', 
-                 gmap_dir='/data/submit/submit-illustris/april/data/g_maps', 
-                 max_z=2):
+                 gmap_dir='/data/submit/submit-illustris/april/data/g_maps'):
         """
         Parameters
         ----------
@@ -47,14 +46,10 @@ class simulation:
             Directory to electron density map. Defaults to './data/n_e_maps'
         gmap_dir: str, optional
             Directory to galaxy map. Defaults to './data/g_maps'
-        max_z: float, optional
-            The maximum redshift out to which FRBs will be simulated. Used
-            only for creating the z(x) interpolant. Default: 2
         """
         
         self.name = name
         self.snap_zs_file = snap_zs_file
-        self.max_z = max_z
         
         if sim_dir is None:
             self.sim_dir = f'/home/tnguser/sims.TNG/{name}/output'
@@ -100,7 +95,7 @@ class simulation:
     def comoving_distance(self, z):
         return self.cosmo.comoving_distance(z).to(u.kpc).value * self.h
     
-    def get_max_dist(self, thetas, phis): 
+    def get_max_dist(self, thetas, phis): # this is constraint #1 in get_good_pixels.ipynb, maybe remove
     
         dvecs = np.sort(np.abs(np.atleast_2d(hp.ang2vec(thetas,phis))))
         scaled_dvecs = (dvecs.T / dvecs[:, -1]).T #(N, 2) arr
@@ -118,6 +113,11 @@ class simulation:
         period = np.lcm(*periods)
 
         return period * self.boxsize / dvecs[:,-1]
+    
+    def closest_snap(self, x):
+        return np.argmin(np.abs(np.repeat(
+            np.atleast_2d(x), 100, axis=0
+        ).T - self.snap_xs), axis=1).reshape(np.shape(x))
     
     @cached_property
     def snap_xs(self):
@@ -157,7 +157,7 @@ class simulation:
     def z_from_dist(self):
         
         # create interpolant for determining redshifts from comoving distances
-        redshift_vals = np.linspace(0,self.max_z,100000)
+        redshift_vals = np.linspace(0, 2, 100000)
         dist_vals = self.comoving_distance(redshift_vals)
         return interp1d(dist_vals, redshift_vals)
     
@@ -168,12 +168,7 @@ class frb_simulation(simulation):
     Inherits from the simulation class. 
     """
     
-    def __init__(
-        self, 
-        name='L205n2500TNG', 
-        origin=np.array([0,0,0]), 
-        **kwargs
-    ):
+    def __init__(self, origin, name='L205n2500TNG', **kwargs):
         """
         Parameters
         ----------
@@ -211,10 +206,10 @@ class frb_simulation(simulation):
             return res[0]
         return res
     
-    def ray_trace(self, dest):
+    def ray_trace(self, dest, xrange=None):
         """
         Ray traces from observer to FRB through the electron map to return 
-        $n_e(x)$.
+        $n_e(x)$. Can specify a range to trace through for debugging purposes.
         
         Returns
         -------
@@ -229,21 +224,29 @@ class frb_simulation(simulation):
             in (ckpc/h)^{-3}.
         """
         dest = np.asarray(dest)
-                         
-        x_edge_dists = [0] #edge distances: for riemann integration
-        xs = [] #bin midpoints, for calculating redshift, n_e(x), etc.
-        nes = [] #electron density in (ckpc/h)**-3
-
         Vcell = self.binsize**3
 
+        if xrange is None:
+            current_pos = self.origin
+            final_pos = dest
+            traveled_dist = 0
+            open_snap = 99
+        else:
+            vhat = (dest - self.origin)/norm(dest - self.origin)
+            current_pos = self.origin + (vhat * xrange[0])
+            final_pos = self.origin + (vhat * xrange[1])
+            traveled_dist = xrange[0]
+            open_snap = self.closest_snap(traveled_dist)
+        
+        x_edge_dists = [traveled_dist] #edge distances: for riemann integration
+        xs = [] #bin midpoints, for calculating redshift, n_e(x), etc.
+        nes = [] #electron density in (ckpc/h)**-3
+        
+        open_map = np.load(self.get_emap_path(open_snap))
+
         sim_box_edges, sim_box_edge_dists, sim_box_coords = get_box_crossings(
-            dest, self.origin, self.boxsize)
-
-        current_pos = self.origin
-        traveled_dist = 0
-
-        open_snap = 99
-        open_map = np.load(self.get_emap_path(99))
+            final_pos, current_pos, self.boxsize)
+        sim_box_edge_dists += traveled_dist
 
         for box_idx in range(len(sim_box_edges)):
 
@@ -261,10 +264,8 @@ class frb_simulation(simulation):
             bin_edge_dists += traveled_dist
             bin_mid_dists = np.convolve(
                 np.insert(bin_edge_dists, 0, traveled_dist), [0.5, 0.5], 
-                'valid')
-            bin_snaps = np.argmin(np.abs(np.repeat(
-                np.atleast_2d(bin_mid_dists), 100, axis=0
-            ).T - self.snap_xs), axis=1) #find closest snapshot for each bin
+            'valid')
+            bin_snaps = self.closest_snap(bin_mid_dists)
             
             for bidx in range(len(bin_edges)): #loop through bins
                 snap = bin_snaps[bidx]
@@ -279,7 +280,6 @@ class frb_simulation(simulation):
 
             current_pos = next_pos
             traveled_dist = sim_box_edge_dists[box_idx]
-            
 
         return np.array(x_edge_dists), np.array(xs), np.array(nes) 
         
@@ -296,12 +296,12 @@ class frb_simulation(simulation):
         dx = np.diff((x_edge_dists/self.h * u.kpc).to(u.pc))
 
         if cumulative:
-            return np.flip(x_edge_dists[-1]-xs)*u.kpc/cu.littleh, \
+            return np.flip(x_edge_dists[-1]-xs)*u.kpc/self.h, \
                    np.cumsum(np.flip(y * dx)) #integrate from FRB to observer
         else:
             return np.sum(y * dx)
     
-    def get_frb_DM(self, dest, cumulative=False):
+    def get_frb_DM(self, dest, xrange=None, cumulative=False):
         """
         Given an FRB location, ray traces through binned simulation snapshots 
         to compute the DM via Riemann integration.
@@ -316,6 +316,8 @@ class frb_simulation(simulation):
         ----------
         dest: (3,) array
             The coordinates of the FRB in the simulation.
+        xrange: (2,) array
+            Distance range (in ckpc/h) to ray trace through
         cumulative: bool, optional
             Whether or not to return the cumulative or total DM.
         
@@ -327,6 +329,5 @@ class frb_simulation(simulation):
             The accumulated DM along the ray from the FRB with astropy units.
         """
         
-        x_edge_dists, xs, nes = self.ray_trace(dest)
+        x_edge_dists, xs, nes = self.ray_trace(dest, xrange=xrange)
         return self.compute_DM(x_edge_dists, xs, nes, cumulative)
-
