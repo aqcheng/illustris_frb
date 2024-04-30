@@ -37,7 +37,6 @@ phi_max = 0.19 #see get_good_pixels.ipynb
 
 res = 0.001 #32400 FRBs; 180x180
 
-
 ## --- COMMAND LINE INPUTS ##
 import argparse
 argp = argparse.ArgumentParser()

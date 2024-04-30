@@ -37,6 +37,9 @@ def get_box_crossings(dest, origin, boxsize):
     """
     dest = np.asarray(dest)
     origin = np.asarray(origin)
+
+    if not((dest.shape == (3,)) and (origin.shape == (3,))):
+        raise ValueError('dest and origin must be (3,) arrays')
     
     edges_list = [dest]
     edge_dists_list = [norm(np.atleast_2d(dest-origin), axis=1)]

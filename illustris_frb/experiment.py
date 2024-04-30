@@ -5,6 +5,7 @@ import healpy as hp
 import pandas as pd
 from .illustris_frb import frb_simulation
 from .utils import Rodrigues, get_box_crossings
+from scipy.interpolate import interp1d
 import multiprocessing as mp
 
 class region:
@@ -46,15 +47,11 @@ class region:
         self.rotmat = Rodrigues(self.k, self.dtheta)
         self.inverse_rotmat = np.linalg.inv(self.rotmat)
 
-        if np.isclose(size%res, 0, rtol=1e-14):
-            self.nside = int(size // res)
-        else:
+        self.nside = int(size / res)
+        if self.nside != size/res:
             raise ValueError('The pixel size `res` must divide `size`.')
 
         self.center = self.rotate(np.pi/2, 0)
-
-        self.gridtheta_ = np.pi/2 + np.arange(-size/2+res/2, size/2, res)
-        self.gridphi_ = np.arange(-size/2+res/2, size/2, res)
     
     def rotate(self, theta_, phi_):
         theta, phi = hp.vec2ang(
@@ -85,9 +82,9 @@ class region:
         return np.vstack((thetas, phis)).T
     
     def is_inside(self, theta_, phi_):
-        
+        phi_ = np.mod(phi_, 2*np.pi)
         return (np.abs(theta_ - np.pi/2) < self.size/2) & \
-               (np.abs(phi_) < self.size/2)
+               ((phi_ < self.size/2) | (phi_ > 2*np.pi - self.size/2))
 
 class exp_simulation(frb_simulation):
     """
@@ -125,8 +122,8 @@ class exp_simulation(frb_simulation):
         super().__init__(origin, name=name, **kwargs)
         self.region = region
         self.gcat_path = os.path.join(gcat_dir, region_name)
-        self.scratch_path = os.path.join(scratch_dir, region_name+'_'+suffix)
-        self.results_path = os.path.join(results_dir, region_name+'_'+suffix)
+        self.scratch_path = os.path.join(scratch_dir, region_name+suffix)
+        self.results_path = os.path.join(results_dir, region_name+suffix)
         self.max_z = max_z
     
     def get_shell_path(self, snap):
@@ -247,18 +244,110 @@ class exp_simulation(frb_simulation):
             for snap in np.asarray(snaps):
                 self.get_shell_galaxies(snap)
     
-    def count_galaxies(self, snaps):
+    def Ngal_grid(self, snaps):
         """
-        Histograms all galaxies into the grid specified by the region. 
+        Histograms all galaxies given by snaps into the grid specified by the
+        region. 
         """
+        reg = self.region
+        edges = np.arange(-reg.size/2, reg.size/2+reg.res/2, reg.res)
 
         g_counts = np.zeros((self.region.nside, self.region.nside))
-        for snap in snaps:
+        for snap in np.asarray(snaps):
             df = pd.read_hdf(self.get_shell_path(snap))
-            H, _, _ = np.histogram2d(df['theta'], df['phi'], 
-                                    (self.region.gridtheta_, 
-                                     self.region.gridphi_))
+            phi_ = np.array(df['phi_'])
+            phi_[phi_ >= np.pi] -= 2*np.pi
+            H, _, _ = np.histogram2d(df['theta_'], phi_, 
+                                    (edges+np.pi/2, edges)) 
             g_counts += H
+        return g_counts
     
-    # now, write the code for the FRBs
-    # def place_FRBs()
+    def compute_DM_grid_partition(self, N=1, n=0, nproc=16, z=None):
+        """
+        Partitions the grid and computes the cumulative DM field (i.e. DM as
+        a function of comoving distance, up to redshift z) of the given 
+        partition. Saves to the scratch directory as cumulative_DM_{n}.npy
+
+        Parameters
+        ----------
+        N: int
+            Number of partitions. Must divide self.region.nside. Default: 
+            no partition (N=1)
+        n: int
+            Partition number, where $0 \leq n \leq N-1$
+        nproc: int
+            Number of parallel processes (should allocate ~1.5 GB per FRB for
+            z=0.4). Default: 16
+        z: float
+            The redshift at which FRBs are placed. Defaults to self.max_z
+        """
+        
+        if z is None: #where FRBs are placed
+            z = self.max_z
+        x = self.comoving_distance(z)
+
+        nrows = int(self.region.nside/N)
+        ncols = self.region.nside
+        start = nrows * n
+        end = nrows * (n+1) # how to slice the theta grid
+
+        # place FRBs at pixel centers
+        centers = np.arange(
+            -self.region.size/2+self.region.res/2,
+            self.region.size/2, self.region.res) 
+        thetas_ = np.pi/2 + centers[start:end]
+        phis_ = np.array(centers)
+        
+        thetas_, phis_ = np.meshgrid(thetas_, phis_)
+        thetas, phis = self.region.rotate(thetas_.T.flatten(), phis_.T.flatten())
+        pix_vecs = self.origin + x * hp.ang2vec(thetas, phis)
+        
+        pool = mp.Pool(processes=nproc)
+        DM_arr = pool.map(self.get_frb_DM, pix_vecs) 
+
+        if not os.path.isdir(self.scratch_path):
+            os.makedirs(self.scratch_path)
+        
+        snapf = self.closest_snap(self.comoving_distance(z))
+        xticks = np.append(np.flip(self.snap_x_lims)[1:100-snapf], x)
+        # nticks = int(x//self.binsize)+1
+        # xticks = np.linspace(2*self.binsize, x, nticks)
+        
+        xticks_path = os.path.join(self.scratch_path, 'xticks.npy')
+        if not os.path.exists(xticks_path):
+            np.save(xticks_path, xticks)
+
+        res = np.zeros((nrows, ncols, len(xticks)))
+        for i, (xs, cum_DMs) in enumerate(DM_arr):
+            func = interp1d(xs.value, cum_DMs.value)
+            res[i//ncols][i%ncols] = func(xticks)
+        np.save(os.path.join(self.scratch_path,
+                             f'cumulative_DM_{n:03}.npy'), res)
+    
+    def DM_grid(self, i_x=-1):
+        """
+        Returns the DM grid. If a DM grid results file does not exist yet, 
+        aggregates the DM field from the scratch directory and saves it.
+        Returns the layer specified by i_x. Retrieves the total DM by default
+        (i.e. all FRBs at z=self.max_z).
+
+        Layer i_x corresponds to the DM up to the edge of snapshot 100-i_x,
+        except the last layer, which is always the total DM.
+        """
+        prefix='cumulative_DM'
+
+        outf = self.results_path + f'_{prefix}.npy'
+        if os.path.exists(outf):
+            res = np.load(outf)
+        else:
+            DMs = []
+            fns = sorted([fn for fn in os.listdir(self.scratch_path) if fn.startswith(prefix)])
+            for fn in fns:
+                DMs.append(np.load(os.path.join(self.scratch_path, fn)))
+            res = np.concatenate(DMs, axis=0)
+            np.save(outf, res)
+
+        if type(i_x) == int:
+            return res[:,:,i_x]
+        return np.choose(i_x, (res[:,:,i] for i in range(res.shape[-1])))
+

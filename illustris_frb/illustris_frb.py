@@ -221,14 +221,14 @@ class frb_simulation(simulation):
             ray in each bin, in ckpc/h.
         nes: (N,) array
             An array containing the electron number density $n_e$ in each bin,
-            in (ckpc/h)^{-3}.
+            in (c cm)^{-3}.
         """
         dest = np.asarray(dest)
-        Vcell = self.binsize**3
+        Vcell = (((self.binsize*u.kpc/self.h).to(u.cm))**3).value #in cm^3
 
         if xrange is None:
-            current_pos = self.origin
-            final_pos = dest
+            current_pos = np.array(self.origin)
+            final_pos = np.array(dest)
             traveled_dist = 0
             open_snap = 99
         else:
@@ -239,7 +239,7 @@ class frb_simulation(simulation):
             open_snap = self.closest_snap(traveled_dist)
         
         x_edge_dists = [traveled_dist] #edge distances: for riemann integration
-        xs = [] #bin midpoints, for calculating redshift, n_e(x), etc.
+        xs = [] #bin midpoints, for calculating redshift
         nes = [] #electron density in (ckpc/h)**-3
         
         open_map = np.load(self.get_emap_path(open_snap))
@@ -283,25 +283,26 @@ class frb_simulation(simulation):
 
         return np.array(x_edge_dists), np.array(xs), np.array(nes) 
         
-    def compute_DM(self, x_edge_dists, xs, nes, cumulative=False):
+    def compute_DM(self, x_edge_dists, xs, nes, cumulative=True):
         """
         Computes the DM given the output of ray_trace.
         $\mathrm{DM} = \int n_e(x)(1+z(x))\,dx$
         """
-    
-        nes = (nes * (u.kpc/self.h)**(-3)).to(u.cm**(-3))
+
+        nes = nes * u.cm**(-3)
         zs = self.z_from_dist(xs)
 
         y = nes * (1 + zs) 
-        dx = np.diff((x_edge_dists/self.h * u.kpc).to(u.pc))
+        dx = np.diff((x_edge_dists*u.kpc/self.h).to(u.pc))
 
-        if cumulative:
-            return np.flip(x_edge_dists[-1]-xs)*u.kpc/self.h, \
-                   np.cumsum(np.flip(y * dx)) #integrate from FRB to observer
+        if cumulative: # integrates from observer to FRB
+            return x_edge_dists[1:]*u.kpc/self.h, np.cumsum(y*dx) 
+            # return np.flip(x_edge_dists[-1]-xs)*u.kpc/self.h, \
+            #        np.cumsum(np.flip(y * dx)) #integrate from FRB to observer
         else:
             return np.sum(y * dx)
     
-    def get_frb_DM(self, dest, xrange=None, cumulative=False):
+    def get_frb_DM(self, dest, xrange=None, cumulative=True):
         """
         Given an FRB location, ray traces through binned simulation snapshots 
         to compute the DM via Riemann integration.

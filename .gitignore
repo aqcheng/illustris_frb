@@ -2,6 +2,8 @@ data/
 figures/
 logs/
 *submit*
+scripts/old/
+notebooks/testing.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
