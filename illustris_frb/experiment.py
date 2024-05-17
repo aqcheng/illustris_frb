@@ -5,7 +5,6 @@ import healpy as hp
 import pandas as pd
 from .illustris_frb import frb_simulation
 from .utils import Rodrigues, get_box_crossings
-from scipy.interpolate import interp1d
 import multiprocessing as mp
 
 class region:
@@ -143,13 +142,17 @@ class exp_simulation(frb_simulation):
         
         return np.unique(np.vstack(boxlist), axis=0)
     
-    def get_shell_galaxies(self, snap, min_z=None, max_z=None, columns=[],
+    def get_shell_galaxies(self, snap, min_z=None, max_z=None, 
+                           columns=[], #    columns=['Mass', 'SFR', 'Radius'],
                            metadata='metadata.txt'):
         """
         Retrieves all galaxies within the shell that the snapshot spans. May
         specify a narrower range of redshifts if needed. Writes results to
         self.gcat_path/{snap}_shell.hdf5.
         """
+
+        # maybe I should implement something about repeat galaxies? i could add the galaxy ID with some offset to distinguish between boxes
+
 
         if os.path.exists(self.get_shell_path(snap)):
             print(f'Skipping snapshot {snap}')
@@ -158,14 +161,14 @@ class exp_simulation(frb_simulation):
         print(f'Retrieving galaxies from snapshot {snap}')
         
         if min_z is None:
-            min_x = self.snap_x_lims[snap]
+            min_x = self.snap_to_xlims(snap)[0]
         else:
-            min_x = max(self.snap_x_lims[snap], self.comoving_distance(min_z))
+            min_x = max(self.snap_to_xlims(snap)[0], self.comoving_distance(min_z))
         if max_z is None:
-            max_x = min(self.snap_x_lims[snap-1], 
+            max_x = min(self.snap_to_xlims(snap)[1], 
                         self.comoving_distance(self.max_z))
         else:
-            max_x = min(self.snap_x_lims[snap-1], self.comoving_distance(max_z),
+            max_x = min(self.snap_to_xlims(snap)[1], self.comoving_distance(max_z),
                         self.comoving_distance(self.max_z))
         
         min_z = self.z_from_dist(min_x)
@@ -177,10 +180,10 @@ class exp_simulation(frb_simulation):
         nbox = len(boxes)
         print(f'{"":<8}{nbox} periodic box(es) found')
         
-        columns = ['x', 'y', 'z'] + columns
-        data = np.array(pd.read_hdf(self.get_gmap_path(snap))[ columns ])
+        data = np.array(pd.read_hdf(self.get_gmap_path(snap))[ ['x', 'y', 'z'] + columns ])
         
         res = []
+        xs = []
         thetas_ = []
         phis_ = []
         for box in boxes:
@@ -188,16 +191,18 @@ class exp_simulation(frb_simulation):
             rel_coords = data[:,:3] + box*self.boxsize - self.origin
             theta_, phi_ = self.region.inverse_rotate(*hp.vec2ang(rel_coords))
             
-            dists = norm(rel_coords, axis=1) 
-            mask = (dists > min_x) & (dists < max_x) & \
+            x = norm(rel_coords, axis=1) 
+            mask = (x > min_x) & (x < max_x) & \
                    self.region.is_inside(theta_, phi_)
             
-            res.append( data[mask] )
-            thetas_.append( theta_[mask] )
-            phis_.append( phi_[mask] )
+            res.append( data[mask][:, 3:] )
+            xs.append( x[mask] )
+            thetas_.append( np.atleast_1d(theta_)[mask] )
+            phis_.append( np.atleast_1d(phi_)[mask] )
         
         #save and write metadata
         df = pd.DataFrame( np.vstack(res), columns=columns )
+        df['x'] = np.concatenate(xs)
         df['theta_'], df['phi_'] = np.concatenate(thetas_), np.concatenate(phis_)
         
         df.to_hdf(self.get_shell_path(snap), key='data')
@@ -244,17 +249,26 @@ class exp_simulation(frb_simulation):
             for snap in np.asarray(snaps):
                 self.get_shell_galaxies(snap)
     
-    def Ngal_grid(self, snaps):
+    def Ngal_grid(self, xrange=None):
         """
-        Histograms all galaxies given by snaps into the grid specified by the
-        region. 
+        Histograms all galaxies within xrange into the grid specified by the
+        region. Gets all galaxies by default.
         """
         reg = self.region
         edges = np.arange(-reg.size/2, reg.size/2+reg.res/2, reg.res)
 
+        if xrange is None:
+            xrange = (0, self.comoving_distance(self.max_z))
+        snaps = np.arange(self.closest_snap(xrange[0]),
+                          self.closest_snap(xrange[1]+1), -1)
+
         g_counts = np.zeros((self.region.nside, self.region.nside))
-        for snap in np.asarray(snaps):
+        for i, snap in enumerate(np.asarray(snaps)):
             df = pd.read_hdf(self.get_shell_path(snap))
+            if i==0:
+                df = df[ df['x'] >= xrange[0] ]
+            if i==len(snaps)-1:
+                df = df[ df['x'] <= xrange[1] ]
             phi_ = np.array(df['phi_'])
             phi_[phi_ >= np.pi] -= 2*np.pi
             H, _, _ = np.histogram2d(df['theta_'], phi_, 
@@ -308,10 +322,8 @@ class exp_simulation(frb_simulation):
         if not os.path.isdir(self.scratch_path):
             os.makedirs(self.scratch_path)
         
-        snapf = self.closest_snap(self.comoving_distance(z))
-        xticks = np.append(np.flip(self.snap_x_lims)[1:100-snapf], x)
-        # nticks = int(x//self.binsize)+1
-        # xticks = np.linspace(2*self.binsize, x, nticks)
+        nticks = 10*int(x//self.binsize)+1
+        xticks = np.linspace(10000, x, nticks)
         
         xticks_path = os.path.join(self.scratch_path, 'xticks.npy')
         if not os.path.exists(xticks_path):
@@ -319,21 +331,28 @@ class exp_simulation(frb_simulation):
 
         res = np.zeros((nrows, ncols, len(xticks)))
         for i, (xs, cum_DMs) in enumerate(DM_arr):
-            func = interp1d(xs.value, cum_DMs.value)
-            res[i//ncols][i%ncols] = func(xticks)
+            res[i//ncols][i%ncols] = np.interp(xticks, xs, cum_DMs.value)
         np.save(os.path.join(self.scratch_path,
                              f'cumulative_DM_{n:03}.npy'), res)
     
-    def DM_grid(self, i_x=-1):
+    def DM_grid(self, x_max=None, x_min=None):
         """
         Returns the DM grid. If a DM grid results file does not exist yet, 
         aggregates the DM field from the scratch directory and saves it.
-        Returns the layer specified by i_x. Retrieves the total DM by default
-        (i.e. all FRBs at z=self.max_z).
+        Returns the DM for FRBs located at comoving distances specified by
+        xgrid. Retrieves the total DM by default (i.e. all FRBs at 
+        z=self.max_z).
 
-        Layer i_x corresponds to the DM up to the edge of snapshot 100-i_x,
-        except the last layer, which is always the total DM.
+        Parameters
+        ----------
+        x_max: float, (N,N) arr
+            Comoving distance in ckpc/h to where the FRBs are located. Defaults
+            to max_z (gets total DM).
+        x_min: float
+            Where to start integrating the DM. Defaults to the first slice in
+            the array, at 10000 ckpc/h.
         """
+
         prefix='cumulative_DM'
 
         outf = self.results_path + f'_{prefix}.npy'
@@ -346,8 +365,23 @@ class exp_simulation(frb_simulation):
                 DMs.append(np.load(os.path.join(self.scratch_path, fn)))
             res = np.concatenate(DMs, axis=0)
             np.save(outf, res)
-
-        if type(i_x) == int:
-            return res[:,:,i_x]
-        return np.choose(i_x, (res[:,:,i] for i in range(res.shape[-1])))
+        
+        totDM = res[:,:,-1]
+        if (x_min==None and x_max==None):
+            return totDM - res[:,:,0]
+        
+        # interpolate to get result
+        if np.asarray(x_max).ndim == 0:
+            x_max = x_max * np.ones_like(totDM)
+        xticks = np.load(os.path.join(self.scratch_path, 'xticks.npy'))
+        if x_min==None:
+            x_min = xticks[0]
+        slice = np.empty_like(totDM)
+        for i in range(res.shape[0]):
+            for j in range(res.shape[1]):
+                DM_0, DM_f = np.interp((x_min, x_max[i,j]), xticks, res[i,j,:])
+                slice[i,j] = DM_f - DM_0
+        return slice
+        
+        # return np.choose(i_x, (res[:,:,i] for i in range(res.shape[-1])))
 

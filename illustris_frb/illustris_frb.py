@@ -119,6 +119,9 @@ class simulation:
             np.atleast_2d(x), 100, axis=0
         ).T - self.snap_xs), axis=1).reshape(np.shape(x))
     
+    def snap_to_xlims(self, snap):
+        return self.all_snap_xlims[snap], self.all_snap_xlims[snap-1]
+    
     @cached_property
     def snap_xs(self):
         """
@@ -146,7 +149,7 @@ class simulation:
         return self.comoving_distance(snap_zs)
     
     @cached_property
-    def snap_x_lims(self):
+    def all_snap_xlims(self):
         """
         Compute the upper limit of comoving distances of each snapshot via 
         linear interpolation of each snapshot's redshift.
@@ -269,7 +272,7 @@ class frb_simulation(simulation):
             
             for bidx in range(len(bin_edges)): #loop through bins
                 snap = bin_snaps[bidx]
-                #if corresponding snapshot is not open, open it
+                # if corresponding snapshot is not open, open it
                 if snap != open_snap: 
                     open_snap = snap
                     open_map = np.load(self.get_emap_path(snap))
@@ -296,7 +299,8 @@ class frb_simulation(simulation):
         dx = np.diff((x_edge_dists*u.kpc/self.h).to(u.pc))
 
         if cumulative: # integrates from observer to FRB
-            return x_edge_dists[1:]*u.kpc/self.h, np.cumsum(y*dx) 
+            return x_edge_dists[1:], np.cumsum(y*dx) 
+            # x_edge_dists is in kpc/h, like all other distances
             # return np.flip(x_edge_dists[-1]-xs)*u.kpc/self.h, \
             #        np.cumsum(np.flip(y * dx)) #integrate from FRB to observer
         else:
