@@ -86,6 +86,8 @@ def Rodrigues(k, theta):
     K = np.cross(np.eye(3), k)
     return expm(K*theta)
 
+def isSquare(shape):
+    return all( i == shape[0] for i in shape )
 
 # def rotate_to_0(theta1, phi1, dtheta, dphi):
 #     """
