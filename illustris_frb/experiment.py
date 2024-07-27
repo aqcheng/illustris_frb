@@ -434,6 +434,18 @@ class exp_simulation(frb_simulation):
         pixs = np.arange(N**2).reshape((N,N))
         return self.get_DMs(pixs, x_max_)
 
+    def bin_DM_array(self, DMs, ipix):
+        """
+        Puts an a list of DMs into a grid of their corresponding pixels, taking
+        averages where needed. Returns a DM and FRB count grid.
+        """
+        N = self.region.nside
+        DMgrid = np.zeros(N**2)
+        np.add.at(DMgrid, ipix, DMs)
+        FRBs_per_pix = np.bincount(ipix, minlength=N**2)
+        DMgrid[ FRBs_per_pix > 1 ] /= FRBs_per_pix[ FRBs_per_pix > 1 ] 
+        return DMgrid.reshape((N,N)), FRBs_per_pix.reshape((N,N))
+
     def sim_DM_grid(self, zrange, N=1000, sfunc=None, **sfunc_kwargs):
         """
         Returns the DM grid, placing FRBs in galaxies located within the
@@ -447,15 +459,12 @@ class exp_simulation(frb_simulation):
         df = self.read_shell_galaxies(zrange).sample(N, replace=True)
         DMs = self.get_DMs(df['ipix'], df['x'])
 
+        res = self.bin_DM_array(DMs, df['ipix'])
+
         if callable(sfunc):
             P = sfunc(DMs, **sfunc_kwargs)
             mask = np.random.rand(*DMs.shape) < P
-            DMs = DMs[mask]
-            df = df[mask]
+            res_s = self.bin_DM_array(DMs[mask], df['ipix'][mask])
+            return res_s, res
 
-        DMgrid = np.zeros(reg.nside**2)
-        np.add.at(DMgrid, df['ipix'], DMs)
-        FRBs_per_pix = np.bincount(df['ipix'], minlength=reg.nside**2)
-        DMgrid[ FRBs_per_pix > 1 ] /= FRBs_per_pix[ FRBs_per_pix > 1 ] #take average
-
-        return DMgrid.reshape((reg.nside, reg.nside)), FRBs_per_pix.reshape((reg.nside, reg.nside))
+        return res
