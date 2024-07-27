@@ -1,11 +1,15 @@
 import os
 import numpy as np
+from scipy.interpolate import interp1d
 from numpy.linalg import norm
 import healpy as hp
 import pandas as pd
 from .illustris_frb import frb_simulation
 from .utils import Rodrigues, get_box_crossings
+from .regions import regions
 import multiprocessing as mp
+
+from functools import cached_property
 
 class region:
     """
@@ -91,7 +95,7 @@ class exp_simulation(frb_simulation):
     and FRBs in a specified region.
     """
     
-    def __init__(self, origin, region, region_name, 
+    def __init__(self, origin, reg_name, reg=None,
                  name='L205n2500TNG', max_z=0.4, suffix='',
                  gcat_dir='/data/submit/submit-illustris/april/data/g_cats',
                  scratch_dir='/work/submit/aqc',
@@ -99,30 +103,36 @@ class exp_simulation(frb_simulation):
                  **kwargs):
         
         """
-        The galaxy catalog is saved to {gcat_dir}/{region_name}.
+        The galaxy catalog is saved to {gcat_dir}/{reg_name}.
         The scratch directory, used for parallel FRB ray tracing, is 
-        {gcat_dir}/{region_name}{suffix}.
+        {gcat_dir}/{reg_name}{suffix}.
         Results (DM and galaxy field) are saved to 
-        {results_dir}/{region_name}{suffix}.
+        {results_dir}/{reg_name}{suffix}.
 
         Parameters
         ----------
         origin: (3,) array
             The coordinates of the observer in the simulation
-        region: region
-            The region on which FRBs will be placed
-        region_name: str
+        
+        reg_name: str
             Label or name for the region and all subdirectories 
+        reg: region
+            The region on which FRBs will be placed. Optional if reg_name is
+            specified and is a named region in regions.py
         max_z: float
             Sets maximum redshift at which galaxies will be retrieved. FRBs
             will be placed by default at this redshift.
         """
 
         super().__init__(origin, name=name, **kwargs)
-        self.region = region
-        self.gcat_path = os.path.join(gcat_dir, region_name)
-        self.scratch_path = os.path.join(scratch_dir, region_name+suffix)
-        self.results_path = os.path.join(results_dir, region_name+suffix)
+
+        if reg is None:
+            reg = region(**regions[reg_name])
+        self.region = reg
+        self.gcat_path = os.path.join(gcat_dir, reg_name)
+        self.scratch_path = os.path.join(scratch_dir, reg_name+suffix)
+        self.results_path = os.path.join(results_dir, reg_name+suffix+'_cumulative_DM.npy')
+        self.xticks_path = os.path.join(results_dir, 'xticks.npy')
         self.max_z = max_z
     
     def get_shell_path(self, snap):
@@ -150,9 +160,6 @@ class exp_simulation(frb_simulation):
         specify a narrower range of redshifts if needed. Writes results to
         self.gcat_path/{snap}_shell.hdf5.
         """
-
-        # maybe I should implement something about repeat galaxies? i could add the galaxy ID with some offset to distinguish between boxes
-
 
         if os.path.exists(self.get_shell_path(snap)):
             print(f'Skipping snapshot {snap}')
@@ -200,13 +207,22 @@ class exp_simulation(frb_simulation):
             thetas_.append( np.atleast_1d(theta_)[mask] )
             phis_.append( np.atleast_1d(phi_)[mask] )
         
-        #save and write metadata
+        # save data
         df = pd.DataFrame( np.vstack(res), columns=columns )
         df['x'] = np.concatenate(xs)
         df['theta_'], df['phi_'] = np.concatenate(thetas_), np.concatenate(phis_)
+        df.loc[df['phi_'] >= np.pi, 'phi_'] -= 2*np.pi
+
+        # assign pixel number
+        ipix_x = (df['theta_'] + self.region.size/2 - np.pi/2) // self.region.res
+        ipix_y = (df['phi_'] + self.region.size/2) // self.region.res
+        ipix_x[ipix_x >= self.region.nside] = self.region.nside-1
+        ipix_y[ipix_y >= self.region.nside] = self.region.nside-1
+        df['ipix'] = (ipix_x*self.region.nside + ipix_y).astype(int)
         
         df.to_hdf(self.get_shell_path(snap), key='data')
 
+        # write metadata
         metadata_path = os.path.join(self.gcat_path, metadata)
         if not os.path.isfile( metadata_path ):
             with open(metadata_path, 'w+') as f:
@@ -249,32 +265,50 @@ class exp_simulation(frb_simulation):
             for snap in np.asarray(snaps):
                 self.get_shell_galaxies(snap)
     
-    def Ngal_grid(self, xrange=None):
+    def read_shell_galaxies(self, zrange=None):
         """
-        Histograms all galaxies within xrange into the grid specified by the
-        region. Gets all galaxies by default.
+        Returns all galaxies within a redshift range in a pandas Dataframe.
         """
-        reg = self.region
-        edges = np.arange(-reg.size/2, reg.size/2+reg.res/2, reg.res)
-
-        if xrange is None:
-            xrange = (0, self.comoving_distance(self.max_z))
+        if zrange is None:
+            zrange = (0, self.max_z)
+        xrange = self.comoving_distance(zrange)
         snaps = np.arange(self.closest_snap(xrange[0]),
                           self.closest_snap(xrange[1]+1), -1)
-
-        g_counts = np.zeros((self.region.nside, self.region.nside))
+        dfs = []
         for i, snap in enumerate(np.asarray(snaps)):
             df = pd.read_hdf(self.get_shell_path(snap))
             if i==0:
                 df = df[ df['x'] >= xrange[0] ]
             if i==len(snaps)-1:
                 df = df[ df['x'] <= xrange[1] ]
-            phi_ = np.array(df['phi_'])
-            phi_[phi_ >= np.pi] -= 2*np.pi
-            H, _, _ = np.histogram2d(df['theta_'], phi_, 
-                                    (edges+np.pi/2, edges)) 
-            g_counts += H
-        return g_counts
+            dfs.append(df.copy(deep=True))
+        return pd.concat(dfs)
+    
+    def Ngal_grid(self, zrange=None):
+        """
+        Histograms all galaxies within xrange into the grid specified by the
+        region. Gets all galaxies by default.
+        """
+        reg = self.region
+
+        if zrange is None:
+            zrange = (0, self.max_z)
+        xrange = self.comoving_distance(zrange)
+        snaps = np.arange(self.closest_snap(xrange[0]),
+                          self.closest_snap(xrange[1]+1), -1)
+
+        g_counts = np.zeros(self.region.nside**2)
+        
+        for i, snap in enumerate(np.asarray(snaps)):
+            df = pd.read_hdf(self.get_shell_path(snap))
+            if i==0:
+                df = df[ df['x'] >= xrange[0] ]
+            if i==len(snaps)-1:
+                df = df[ df['x'] <= xrange[1] ]
+            
+            g_counts += np.bincount(df['ipix'], minlength=self.region.nside**2)
+
+        return g_counts.reshape((self.region.nside, self.region.nside))
     
     def compute_DM_grid_partition(self, N=1, n=0, nproc=16, z=None):
         """
@@ -325,9 +359,8 @@ class exp_simulation(frb_simulation):
         nticks = 10*int(x//self.binsize)+1
         xticks = np.linspace(10000, x, nticks)
         
-        xticks_path = os.path.join(self.scratch_path, 'xticks.npy')
-        if not os.path.exists(xticks_path):
-            np.save(xticks_path, xticks)
+        if not os.path.exists(self.xticks_path):
+            np.save(self.xticks_path, xticks)
 
         res = np.zeros((nrows, ncols, len(xticks)))
         for i, (xs, cum_DMs) in enumerate(DM_arr):
@@ -335,12 +368,48 @@ class exp_simulation(frb_simulation):
         np.save(os.path.join(self.scratch_path,
                              f'cumulative_DM_{n:03}.npy'), res)
     
-    def DM_grid(self, x_max=None, x_min=None):
+    def DM_result(self):
         """
-        Returns the DM grid. If a DM grid results file does not exist yet, 
-        aggregates the DM field from the scratch directory and saves it.
+        Return the DM results array and corresponding comoving distances. If a 
+        DM grid results file does not exist yet, aggregates the DM field from 
+        the scratch directory and saves it.
+        """
+        prefix='cumulative_DM'
+
+        if os.path.exists(self.results_path):
+            res = np.load(self.results_path)
+        else:
+            DMs = []
+            fns = sorted([fn for fn in os.listdir(self.scratch_path) if fn.startswith(prefix)])
+            for fn in fns:
+                DMs.append(np.load(os.path.join(self.scratch_path, fn)))
+            res = np.concatenate(DMs, axis=0)
+            np.save(self.results_path, res)
+        
+        xticks = np.load(self.xticks_path)
+
+        return xticks[1:], res[:,:,1:] - res[:,:,0:1] # subtract the "Milky Way DM"
+    
+    @cached_property
+    def interp_DM_grid(self):
+        xticks, res = self.DM_result()
+        return interp1d(xticks, res, fill_value=(0, np.nan))
+
+    def get_DMs(self, pixs, xs):
+        """
+        Given two arrays of of pixels and distances, gets the DM of an FRB
+        at that distance in that pixel.
+        """
+        pixs_, xs_ = np.array(pixs).astype(int), np.array(xs).flatten()
+        Nfrbs = len(xs_) # Nfrbs = len(pixs_.flatten()) = len(xs_.flatten())
+
+        DMs = self.interp_DM_grid(xs_).reshape(self.region.nside**2, Nfrbs)
+        return np.array([DMs[pix,i] for i, pix in enumerate(pixs_.flatten())]).reshape(pixs_.shape)
+
+    def DM_grid(self, x_max=None):
+        """
         Returns the DM for FRBs located at comoving distances specified by
-        xgrid. Retrieves the total DM by default (i.e. all FRBs at 
+        x_max. Retrieves the total DM by default (i.e. all FRBs at 
         z=self.max_z).
 
         Parameters
@@ -353,35 +422,40 @@ class exp_simulation(frb_simulation):
             the array, at 10000 ckpc/h.
         """
 
-        prefix='cumulative_DM'
+        if x_max is None:
+            xticks, res = self.DM_result()
+            return res[:,:,-1]
+        
+        # else, interpolate to get result
+        x_max_ = np.array(x_max)
+        N = self.region.nside
+        if x_max_.ndim == 0:
+            x_max_ = x_max_ * np.ones((N,N))
+        pixs = np.arange(N**2).reshape((N,N))
+        return self.get_DMs(pixs, x_max_)
 
-        outf = self.results_path + f'_{prefix}.npy'
-        if os.path.exists(outf):
-            res = np.load(outf)
-        else:
-            DMs = []
-            fns = sorted([fn for fn in os.listdir(self.scratch_path) if fn.startswith(prefix)])
-            for fn in fns:
-                DMs.append(np.load(os.path.join(self.scratch_path, fn)))
-            res = np.concatenate(DMs, axis=0)
-            np.save(outf, res)
-        
-        totDM = res[:,:,-1]
-        if (x_min==None and x_max==None):
-            return totDM - res[:,:,0]
-        
-        # interpolate to get result
-        if np.asarray(x_max).ndim == 0:
-            x_max = x_max * np.ones_like(totDM)
-        xticks = np.load(os.path.join(self.scratch_path, 'xticks.npy'))
-        if x_min==None:
-            x_min = xticks[0]
-        slice = np.empty_like(totDM)
-        for i in range(res.shape[0]):
-            for j in range(res.shape[1]):
-                DM_0, DM_f = np.interp((x_min, x_max[i,j]), xticks, res[i,j,:])
-                slice[i,j] = DM_f - DM_0
-        return slice
-        
-        # return np.choose(i_x, (res[:,:,i] for i in range(res.shape[-1])))
+    def sim_DM_grid(self, zrange, N=1000, sfunc=None, **sfunc_kwargs):
+        """
+        Returns the DM grid, placing FRBs in galaxies located within the
+        redshift range zrange. 
 
+        sfunc is a selection function; it should take as its first argument
+        an array of DMs and return an array of detection probabilities.
+        """
+        reg = self.region
+
+        df = self.read_shell_galaxies(zrange).sample(N, replace=True)
+        DMs = self.get_DMs(df['ipix'], df['x'])
+
+        if callable(sfunc):
+            P = sfunc(DMs, **sfunc_kwargs)
+            mask = np.random.rand(*DMs.shape) < P
+            DMs = DMs[mask]
+            df = df[mask]
+
+        DMgrid = np.zeros(reg.nside**2)
+        np.add.at(DMgrid, df['ipix'], DMs)
+        FRBs_per_pix = np.bincount(df['ipix'], minlength=reg.nside**2)
+        DMgrid[ FRBs_per_pix > 1 ] /= FRBs_per_pix[ FRBs_per_pix > 1 ] #take average
+
+        return DMgrid.reshape((reg.nside, reg.nside)), FRBs_per_pix.reshape((reg.nside, reg.nside))

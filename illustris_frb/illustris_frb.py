@@ -13,7 +13,7 @@ from .utils import get_box_crossings
 
 class simulation:
     """
-    An object for the attributes of an IllustrisTNG simulation, including the 
+    A class representing the attributes of an IllustrisTNG simulation, including the
     simulation boxsize, paths to the electron density maps and simulation 
     files, and cosmology.
     """
@@ -21,7 +21,7 @@ class simulation:
     def __init__(self, name='L205n2500TNG', binsize=500, sim_dir=None, 
                  header_file='/data/submit/submit-illustris/april/data/header_info/L205n2500TNG_header.hdf5',
                  snap_zs_file = '/data/submit/submit-illustris/april/data/header_info/snap_zs.npy', 
-                 emap_dir='/data/submit/submit-illustris/april/data/n_e_maps', 
+                 emap_dir='/data/submit/submit-illustris/april/data/n_e_maps_500', 
                  gmap_dir='/data/submit/submit-illustris/april/data/g_maps'):
         """
         Parameters
