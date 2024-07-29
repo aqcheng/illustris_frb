@@ -69,7 +69,7 @@ def cross_power_estimator_2d(arr_a, arr_b, s, delta_ell, ell_max=None):
     ells = norm(vec_ells, axis=0)
     
     if ell_max is None:
-        ell_max = np.amax(ells)
+        ell_max = np.pi/s
     ell_bin_edges = np.arange(0, ell_max, delta_ell)
     counts, _ = np.histogram(ells.flatten(), bins=ell_bin_edges)
     tot, _ = np.histogram(ells.flatten(), bins=ell_bin_edges, weights=f_ab.flatten())
@@ -80,7 +80,7 @@ def cross_power_estimator_2d(arr_a, arr_b, s, delta_ell, ell_max=None):
     
     return ell_mids[mask], res[mask]
 
-def cross_power_estimator(arr_a, arr_b, s, delta_ell=50):
+def cross_power_estimator(arr_a, arr_b, s, nbins=100):
     """
     Calculates the N-D cross-power spectrum for two N-D square arrays.
     """
@@ -103,39 +103,39 @@ def cross_power_estimator(arr_a, arr_b, s, delta_ell=50):
     vec_ells = 2*np.pi/(N*s) * vec_ells
     ells = norm(vec_ells, axis=0)
     
-    ell_bin_edges = np.arange(0, np.amax(ells), delta_ell)
+    ell_bin_edges = np.logspace(np.log10(2*np.pi/L), np.log10(2*np.pi/s), nbins+1)
     counts, _ = np.histogram(ells.flatten(), bins=ell_bin_edges)
     tot, _ = np.histogram(ells.flatten(), bins=ell_bin_edges, weights=f_ab.flatten())
 
-    ell_mids = np.convolve(ell_bin_edges, [0.5,0.5], 'valid')
     res = (s/N)**nd * tot/counts
-    mask = np.nonzero(counts)
     
-    return ell_mids[mask], res[mask]
+    return ell_bin_edges, res
 
-def get_Clerr_from_Cls(DMs, N_gs, ells, Clgg, ClDD, res=0.0008, delta_ell=50):
+def get_Clerr_from_Cls(DMs, N_gs, ell_bin_edges, Clgg, ClDD, res=0.0008):
     """
     Get the Gaussian error bar for a cross-power spectrum from the auto power spectrum.
     """
+    ells = np.convolve(ell_bin_edges, [0.5,0.5], 'valid')
+    delta_ells = np.ediff1d(ell_bin_edges)
     Omega = (len(DMs)*res)**2
     NlDg2 = (Clgg + 1/(np.sum(N_gs)/Omega))*(ClDD + (np.var(DMs)*res**2))
-    return 1 /  np.sqrt(Omega * ells*delta_ell/(2*np.pi) / NlDg2)
+    return 1 /  np.sqrt(Omega * ells*delta_ells/(2*np.pi) / NlDg2)
 
-def get_Clerr(DMs, N_gs, res=0.0008, delta_ell=50):
+def get_Clerr(DMs, N_gs, res=0.0008, nbins=100):
     """
     Compute the Gaussian error bar for the cross-correlation of two fields, the
     second of which is an overdensity field.
     """
     delta_gs = N_gs/np.mean(N_gs) - 1
-    ells, Clgg = cross_power_estimator(delta_gs, delta_gs, res, delta_ell=50)
-    ells, ClDD = cross_power_estimator(DMs, DMs, res, delta_ell=50)
+    ell_bin_edges, Clgg = cross_power_estimator(delta_gs, delta_gs, res, nbins)
+    ell_bin_edges, ClDD = cross_power_estimator(DMs, DMs, res, nbins)
 
-    return get_Clerr_from_Cls(DMs, N_gs, ells, Clgg, ClDD, res, delta_ell)
+    return get_Clerr_from_Cls(DMs, N_gs, ell_bin_edges, Clgg, ClDD, res)
 
 # cross power spectrum with incomplete data using the optimal quadratic estimator
 # see https://www.overleaf.com/read/vdpbdpjvwrmp#2e27ab
 
-def cross_oqe(DM, delta_g, frb_mult, s=0.0008, delta_ell=50):
+def cross_oqe(DM, delta_g, frb_mult, s=0.0008, nbins=20):
     """
     Computes the DM-galaxy cross-correlation using the optimal quadratic
     estimator for an imcomplete DM field. Assumes uncorrelated variance. 
@@ -155,37 +155,26 @@ def cross_oqe(DM, delta_g, frb_mult, s=0.0008, delta_ell=50):
     """
 
     N = len(DM)
-    A = (N*s)**2
-    ell_bin_edges = np.arange(0, np.pi/s, delta_ell)
-    ell_bin_midpoints = np.convolve(ell_bin_edges, (0.5, 0.5), mode='valid')
-    n_ells = len(ell_bin_midpoints)
+    L = N*s
+    ell_bin_edges = np.logspace(np.log10(2*np.pi/L), np.log10(2*np.pi/s), nbins+1)
     vec_ells = np.indices((N,N), dtype=float)
     vec_ells[ vec_ells >= np.ceil(N/2) ] -= N #effectively, this is fftshift
     vec_ells = 2*np.pi/(N*s) * vec_ells
     ells = norm(vec_ells, axis=0)
-    ell_bin_inds = np.digitize(ells, ell_bin_edges) - 1 # which bin each ell corresponds to
 
-    invD = frb_mult / np.var(DM)  # flatten and put on diagonal for actual D^{-1}
-    invG = np.ones((N,N)) / np.var(delta_g) 
+    n = np.sum(frb_mult)
+    varD, varG = np.var(DM[frb_mult > 0]), np.var(delta_g)
+    invD, invG = frb_mult / varD, np.ones_like(frb_mult) / varG
 
     ## compute numerator
     Dd = (DM - np.mean(DM)) * invD
     Gg = delta_g * invG
-    num = np.conjugate(np.fft.fft2(Dd)) * np.fft.fft2(Gg) / A
+    num = np.conjugate(np.fft.fft2(Dd)) * np.fft.fft2(Gg) / L**2
     num_l, _ = np.histogram(ells.flatten(), bins=ell_bin_edges, weights=num.flatten()) 
 
     ## compute Fisher matrix
-    summand = np.fft.fft2(invD) * np.conjugate(np.fft.fft2(invG)) / (2*A**2) #Eq. 10
-    # sum over delta m, delta n
-    F = np.empty((n_ells, n_ells))
-    ms, ns = np.indices((N,N))
-    for i in range(n_ells):
-        mask = ell_bin_inds == i
-        for j in range(n_ells):
-            mask_ = ell_bin_inds == j
-            dm = np.subtract(*np.meshgrid(ms[mask], ms[mask_]))
-            dn = np.subtract(*np.meshgrid(ns[mask], ns[mask_]))
-            F[i,j] = np.sum(np.real(summand[dm,dn]))
-    Finv = np.linalg.inv(F)
-    ClDg = np.matmul(Finv, np.atleast_2d(np.real(num_l)).T).flatten() / 2
-    return ell_bin_midpoints, ClDg, Finv
+    H, _ = np.histogram(ells.flatten(), ell_bin_edges)
+    Finv = (2*N**2*s**4*varD*varG) / (H*n) # diagonal matrix
+    ClDg = Finv * np.real(num_l) / 2
+
+    return ell_bin_edges, ClDg, Finv
