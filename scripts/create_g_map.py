@@ -17,7 +17,9 @@ and half mass radius, are stored in '{outpath}/{snap}_galaxies.hdf5'.
 
 #inputs
 sim = simulation('L205n2500TNG')
-outpath = '/home/tnguser/frb_project/data/unbinned_galaxy_maps'
+outpath = '/home/tnguser/frb_project/data/g_maps'
+if not os.path.exists(outpath):
+    os.makedirs(outpath)
 
 def get_all_galaxies(snap):
     
@@ -27,7 +29,7 @@ def get_all_galaxies(snap):
     N_chunks = header['NumFiles']
     
     mask = []
-    res = np.empty((2*N_subgroups, 6))
+    res = np.empty((2*N_subgroups, 9))
     i = 0 #row
     
     for chunk in range(N_chunks):
@@ -41,18 +43,23 @@ def get_all_galaxies(snap):
             mask += list(f['Subhalo/SubhaloFlag'])
             res[i:i+n_subgroups, 0:3] = np.array(f['Subhalo/SubhaloCM'])
             res[i:i+n_subgroups, 3] = np.array(f['Subhalo/SubhaloMass'])
-            res[i:i+n_subgroups, 4] = np.array(f['Subhalo/SubhaloSFR'])
-            res[i:i+n_subgroups, 5] = np.array(f['Subhalo/SubhaloHalfmassRad'])
+            res[i:i+n_subgroups, 4] = np.array(f['Subhalo/SubhaloMassInMaxRadType'][:,4]) #stellar mass
+            res[i:i+n_subgroups, 5] = np.array(f['Subhalo/SubhaloSFR'])
+            res[i:i+n_subgroups, 6] = np.array(f['Subhalo/SubhaloHalfmassRad'])
+            res[i:i+n_subgroups, 7] = np.array(f['Subhalo/SubhaloStellarPhotometrics'][:,2]) #visual magnitude
+            res[i:i+n_subgroups, 8] = np.array(f['Subhalo/SubhaloStellarPhotometrics'][:,4]) #g magnitude
+            
         
         i += n_subgroups
     
     res = res[:i]
-    df = pd.DataFrame(res[mask], columns=['x', 'y', 'z', 'Mass', 'SFR', 'Radius'])
+    df = pd.DataFrame(res[mask], columns=['x', 'y', 'z', 'Mass', 'Stellar Mass', 'SFR', 'Half mass radius', 'M_V', 'M_g'])
     df.to_hdf(os.path.join(outpath, f'{snap}_galaxies.hdf5'), key='data')
     
     return df
 
-for snap in range(98, 31, -1):
+# for snap in range(99, 31, -1):
+for snap in range(99, 70, -1):
     
     print(f'{time.time():<5.1f}: getting galaxies from snapshot {snap}')
     get_all_galaxies(snap)
