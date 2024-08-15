@@ -80,7 +80,25 @@ def cross_power_estimator_2d(arr_a, arr_b, s, delta_ell, ell_max=None):
     
     return ell_mids[mask], res[mask]
 
-def cross_power_estimator(arr_a, arr_b, s, nbins=100):
+def get_ells(shape, s, nbins):
+    """
+    Bins the ells for a square array.
+    """
+    N = shape[0]
+    vec_ells = np.indices(shape, dtype=float)
+    vec_ells[ vec_ells >= np.ceil(N/2) ] -= N #effectively, this is fftshift
+    vec_ells = 2*np.pi/(N*s) * vec_ells
+    ells = norm(vec_ells, axis=0)
+    
+    ell_bin_edges = np.logspace(np.log10(2*np.pi/(N*s)), np.log10(2*np.pi/s), nbins+1)
+    delta_ells = np.ediff1d(ell_bin_edges)
+    ell_mids = ell_bin_edges[:-1]+delta_ells/2
+    counts, _ = np.histogram(ells.flatten(), bins=ell_bin_edges)
+    mask = counts > 0
+
+    return ell_mids, delta_ells, ell_bin_edges, ells, counts, mask
+
+def cross_power_estimator(arr_a, arr_b, s=0.0008, nbins=50, return_deltas=False):
     """
     Calculates the N-D cross-power spectrum for two N-D square arrays.
     """
@@ -91,51 +109,45 @@ def cross_power_estimator(arr_a, arr_b, s, nbins=100):
         raise Exception('Input arrays must be square')
     
     N = arr_a.shape[0]
-    nd = arr_a.ndim
+    ell_mids, delta_ells, ell_bin_edges, ells, counts, mask = get_ells(
+        arr_a.shape, s, nbins)
     
     f_a = np.fft.fftn(arr_a)
     f_b = np.fft.fftn(arr_b) 
     f_ab = np.real(np.conjugate(f_a)*f_b)
     
-    # scale
-    vec_ells = np.indices((N,)*nd, dtype=float)
-    vec_ells[ vec_ells >= np.ceil(N/2) ] -= N #effectively, this is fftshift
-    vec_ells = 2*np.pi/(N*s) * vec_ells
-    ells = norm(vec_ells, axis=0)
-    
-    ell_bin_edges = np.logspace(np.log10(2*np.pi/L), np.log10(2*np.pi/s), nbins+1)
-    counts, _ = np.histogram(ells.flatten(), bins=ell_bin_edges)
     tot, _ = np.histogram(ells.flatten(), bins=ell_bin_edges, weights=f_ab.flatten())
+    tot, counts, ell_mids, delta_ells = (
+        tot[mask], counts[mask], ell_mids[mask], delta_ells[mask])
 
-    res = (s/N)**nd * tot/counts
-    
-    return ell_bin_edges, res
+    res = (s/N)**(arr_a.ndim) * tot/counts
+    if return_deltas:
+        return ell_mids, res, delta_ells
+    return ell_mids, res
 
-def get_Clerr_from_Cls(DMs, N_gs, ell_bin_edges, Clgg, ClDD, res=0.0008):
+def get_Clerr_from_Cls(DMs, N_gs, ell_mids, delta_ells, Clgg, ClDD, res=0.0008):
     """
     Get the Gaussian error bar for a cross-power spectrum from the auto power spectrum.
     """
-    ells = np.convolve(ell_bin_edges, [0.5,0.5], 'valid')
-    delta_ells = np.ediff1d(ell_bin_edges)
     Omega = (len(DMs)*res)**2
     NlDg2 = (Clgg + 1/(np.sum(N_gs)/Omega))*(ClDD + (np.var(DMs)*res**2))
-    return 1 /  np.sqrt(Omega * ells*delta_ells/(2*np.pi) / NlDg2)
+    return 1 /  np.sqrt(Omega * ell_mids * delta_ells/(2*np.pi) / NlDg2)
 
-def get_Clerr(DMs, N_gs, res=0.0008, nbins=100):
+def get_Clerr(DMs, N_gs, s=0.0008, nbins=100):
     """
     Compute the Gaussian error bar for the cross-correlation of two fields, the
     second of which is an overdensity field.
     """
     delta_gs = N_gs/np.mean(N_gs) - 1
-    ell_bin_edges, Clgg = cross_power_estimator(delta_gs, delta_gs, res, nbins)
-    ell_bin_edges, ClDD = cross_power_estimator(DMs, DMs, res, nbins)
+    ell_mids, Clgg = cross_power_estimator(delta_gs, delta_gs, s, nbins)
+    ell_mids, ClDD, delta_ells = cross_power_estimator(DMs, DMs, s, nbins, True)
 
-    return get_Clerr_from_Cls(DMs, N_gs, ell_bin_edges, Clgg, ClDD, res)
+    return get_Clerr_from_Cls(DMs, N_gs, ell_mids, delta_ells, Clgg, ClDD, s)
 
 # cross power spectrum with incomplete data using the optimal quadratic estimator
 # see https://www.overleaf.com/read/vdpbdpjvwrmp#2e27ab
 
-def cross_oqe(DM, delta_g, frb_mult, s=0.0008, nbins=20):
+def cross_oqe(DM, delta_g, frb_mult, s=0.0008, nbins=20, return_deltas=False):
     """
     Computes the DM-galaxy cross-correlation using the optimal quadratic
     estimator for an imcomplete DM field. Assumes uncorrelated variance. 
@@ -154,27 +166,33 @@ def cross_oqe(DM, delta_g, frb_mult, s=0.0008, nbins=20):
         Power spectrum binsize
     """
 
-    N = len(DM)
-    L = N*s
-    ell_bin_edges = np.logspace(np.log10(2*np.pi/L), np.log10(2*np.pi/s), nbins+1)
-    vec_ells = np.indices((N,N), dtype=float)
-    vec_ells[ vec_ells >= np.ceil(N/2) ] -= N #effectively, this is fftshift
-    vec_ells = 2*np.pi/(N*s) * vec_ells
-    ells = norm(vec_ells, axis=0)
+    if DM.shape != delta_g.shape:
+        raise Exception('Input arrays must have the same size')
+    if not isSquare(DM.shape):
+        raise Exception('Input arrays must be square')
 
-    n = np.sum(frb_mult)
-    varD, varG = np.var(DM[frb_mult > 0]), np.var(delta_g)
-    invD, invG = frb_mult / varD, np.ones_like(frb_mult) / varG
+    N = len(DM)
+    A = (N*s)**2
+    ell_mids, delta_ells, ell_bin_edges, ells, counts, mask = get_ells(
+        DM.shape, s, nbins)
+
+    where_frb = frb_mult > 0
+    n = np.sum(where_frb)
+    varD, varG = np.var(DM[where_frb]), np.var(delta_g)
+    invD, invG = where_frb.astype(int) / varD, np.ones_like(frb_mult) / varG
 
     ## compute numerator
     Dd = (DM - np.mean(DM)) * invD
     Gg = delta_g * invG
-    num = np.conjugate(np.fft.fft2(Dd)) * np.fft.fft2(Gg) / L**2
+    num = np.conjugate(np.fft.fft2(Dd)) * np.fft.fft2(Gg) / A
     num_l, _ = np.histogram(ells.flatten(), bins=ell_bin_edges, weights=num.flatten()) 
+    num_l, counts, ell_mids, delta_ells = (
+        num_l[mask], counts[mask], ell_mids[mask], delta_ells[mask])
 
     ## compute Fisher matrix
-    H, _ = np.histogram(ells.flatten(), ell_bin_edges)
-    Finv = (2*N**2*s**4*varD*varG) / (H*n) # diagonal matrix
+    Finv = (2*N**2*s**4*varD*varG) / (counts*n) # diagonal matrix
     ClDg = Finv * np.real(num_l) / 2
 
-    return ell_bin_edges, ClDg, Finv
+    if return_deltas:
+        return ell_mids, ClDg, delta_ells
+    return ell_mids, ClDg
