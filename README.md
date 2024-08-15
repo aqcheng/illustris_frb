@@ -1,5 +1,7 @@
 # DIRECTORY ORGANIZATION 
 
+THIS IS CURRENTLY VERY OUTDATED - I WILL UPDATE THIS LATER!
+
 List of data runs:
 - `test_flat`: Target region is a 0.18 rad x 0.18 rad square equatorial region, $\theta \in [\pi/2 - 0.09, \pi/2 + 0.09]$, $\phi \in [0.01, 0.19]$. This region was found using the notebook `notebooks/get_good_pixels.ipynb`, along with other potential target regions. The origin is set at `binsize * np.array([50, 70, 23])`, which is a void region within the simulation.
     - `test_flat_001` put FRBs at $z=0.4$ in a grid with pixel size 0.01 rad, with $180^2$ FRBs total. However, it was getting all galaxies within the cone.
