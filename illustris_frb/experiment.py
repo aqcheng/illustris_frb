@@ -8,6 +8,10 @@ from .illustris_frb import frb_simulation
 from .utils import Rodrigues, get_box_crossings
 from .regions import regions
 import multiprocessing as mp
+try:
+    import _pickle as pickle
+except:
+    import pickle
 
 from functools import cached_property
 
@@ -88,6 +92,11 @@ class region:
         phi_ = np.mod(phi_, 2*np.pi)
         return (np.abs(theta_ - np.pi/2) < self.size/2) & \
                ((phi_ < self.size/2) | (phi_ > 2*np.pi - self.size/2))
+    
+    def pix2ang_(self, ipix):
+        theta_ = -self.size/2 + self.res/2 + (ipix // self.nside)*self.res + np.pi/2
+        phi_ = -self.size/2 + self.res/2 + (ipix % self.nside)*self.res 
+        return theta_, phi_
 
 class exp_simulation(frb_simulation):
     """
@@ -132,6 +141,7 @@ class exp_simulation(frb_simulation):
         self.gcat_path = os.path.join(gcat_dir, reg_name)
         self.scratch_path = os.path.join(scratch_dir, reg_name+suffix)
         self.results_path = os.path.join(results_dir, reg_name+suffix+'_cumulative_DM.npy')
+        self.interp_path = os.path.join(results_dir, reg_name+suffix+'_interp.pkl')
         self.xticks_path = os.path.join(results_dir, 'xticks.npy')
         self.max_z = max_z
     
@@ -153,12 +163,15 @@ class exp_simulation(frb_simulation):
         return np.unique(np.vstack(boxlist), axis=0)
     
     def get_shell_galaxies(self, snap, min_z=None, max_z=None, 
-                           columns=[], #    columns=['Mass', 'SFR', 'Radius'],
+                           columns='all',
                            metadata='metadata.txt'):
         """
         Retrieves all galaxies within the shell that the snapshot spans. May
         specify a narrower range of redshifts if needed. Writes results to
         self.gcat_path/{snap}_shell.hdf5.
+
+        columns: list of all columns besides 'x', 'y', and 'z'. By default,
+        retrieves all columns (columns='all').
         """
 
         if os.path.exists(self.get_shell_path(snap)):
@@ -187,7 +200,15 @@ class exp_simulation(frb_simulation):
         nbox = len(boxes)
         print(f'{"":<8}{nbox} periodic box(es) found')
         
-        data = np.array(pd.read_hdf(self.get_gmap_path(snap))[ ['x', 'y', 'z'] + columns ])
+        if type(columns) is list:
+            data = np.array(pd.read_hdf(self.get_gmap_path(snap))[ ['x', 'y', 'z'] + columns ])
+        else:
+            if columns == 'all':
+                df = pd.read_hdf(self.get_gmap_path(snap))
+                columns = df.columns[3:]
+                data = np.array(df)
+            else:
+                raise ValueError("`columns` must be either a list or 'all'")
         
         res = []
         xs = []
@@ -282,33 +303,50 @@ class exp_simulation(frb_simulation):
             if i==len(snaps)-1:
                 df = df[ df['x'] <= xrange[1] ]
             dfs.append(df.copy(deep=True))
-        return pd.concat(dfs)
+        return pd.concat(dfs, ignore_index=True)
     
-    def Ngal_grid(self, zrange=None):
+    def Ngal_grid(self, zrange=None, df=None, mass_cutoff=None, m_g_cutoff=None):
         """
         Histograms all galaxies within xrange into the grid specified by the
         region. Gets all galaxies by default.
         """
-        reg = self.region
 
-        if zrange is None:
-            zrange = (0, self.max_z)
-        xrange = self.comoving_distance(zrange)
-        snaps = np.arange(self.closest_snap(xrange[0]),
-                          self.closest_snap(xrange[1]+1), -1)
+        if df is None:
 
-        g_counts = np.zeros(self.region.nside**2)
-        
-        for i, snap in enumerate(np.asarray(snaps)):
-            df = pd.read_hdf(self.get_shell_path(snap))
-            if i==0:
-                df = df[ df['x'] >= xrange[0] ]
-            if i==len(snaps)-1:
-                df = df[ df['x'] <= xrange[1] ]
+            g_counts = np.zeros(self.region.nside**2)
+
+            if zrange is None:
+                zrange = (0, self.max_z)
+            xrange = self.comoving_distance(zrange)
+            snaps = np.arange(self.closest_snap(xrange[0]),
+                            self.closest_snap(xrange[1]+1), -1)
             
-            g_counts += np.bincount(df['ipix'], minlength=self.region.nside**2)
+            for i, snap in enumerate(np.asarray(snaps)):
+                df = pd.read_hdf(self.get_shell_path(snap))
+                if i==0:
+                    df = df[ df['x'] >= xrange[0] ]
+                if i==len(snaps)-1:
+                    df = df[ df['x'] <= xrange[1] ]
+                if mass_cutoff is not None:
+                    df = df[ df['Mass'] > mass_cutoff ]
+                if m_g_cutoff is not None:
+                    if 'm_g' not in df.columns:
+                        df['m_g'] = 5*np.log10(df['x'] * 1000 / self.h) - 5 + df['M_g']
+                    df = df[ df['m_g'] < m_g_cutoff ]
+                
+                g_counts += np.bincount(df['ipix'], minlength=self.region.nside**2)
 
-        return g_counts.reshape((self.region.nside, self.region.nside))
+            return g_counts.reshape((self.region.nside, self.region.nside))
+        
+        df_ = df.copy(deep=True)
+        if mass_cutoff is not None:
+            df_ = df_[ df['Mass'] > mass_cutoff ]
+        if m_g_cutoff is not None:
+            if 'm_g' not in df.columns:
+                df_['m_g'] = 5*np.log10(df_['x'] * 1000 / self.h) - 5 + df_['M_g']
+            df_= df_[ df_['m_g'] < m_g_cutoff ]
+    
+        return np.bincount(df_['ipix'], minlength=self.region.nside**2)
     
     def compute_DM_grid_partition(self, N=1, n=0, nproc=16, z=None):
         """
@@ -392,8 +430,13 @@ class exp_simulation(frb_simulation):
     
     @cached_property
     def interp_DM_grid(self):
+        if os.path.exists(self.interp_path):
+            return pickle.load(open(self.interp_path, 'rb'))
         xticks, res = self.DM_result()
-        return interp1d(xticks, res, fill_value=(0, np.nan))
+        res = interp1d(xticks, res, fill_value=(0, np.nan))
+        with open(self.interp_path, 'wb') as f:
+            pickle.dump(res, f)
+        return res
 
     def get_DMs(self, pixs, xs):
         """
@@ -446,25 +489,54 @@ class exp_simulation(frb_simulation):
         DMgrid[ FRBs_per_pix > 1 ] /= FRBs_per_pix[ FRBs_per_pix > 1 ] 
         return DMgrid.reshape((N,N)), FRBs_per_pix.reshape((N,N))
 
-    def sim_DM_grid(self, zrange, N=1000, sfunc=None, **sfunc_kwargs):
+    def sim_DM_grid(self, sampled_df=None, zrange=None, host_df=None, N=3000, weights=None, 
+                    DM_sfunc=None, g_sfunc=None):
         """
         Returns the DM grid, placing FRBs in galaxies located within the
         redshift range zrange. 
 
-        sfunc is a selection function; it should take as its first argument
-        an array of DMs and return an array of detection probabilities.
+        Parameters
+        ----------
+        sampled_df: pandas.DataFrame
+            A pandas DataFrame of a randomly drawn sample of FRB host galaxies.
+            If given, the other parameters (aside from the selection functions) 
+            are ignored. Default: None
+        zrange: (2,) tuple
+            Range of redshifts from which to draw the FRBs. Defaults to None,
+            which draws from the entire redshift range (0, self.z_max).
+        host_df: pandas.DataFrame
+            A pandas DataFrame containing the host galaxy catalog. Defaults to None,
+            which retrieves all galaxies within zrange.
+        N: int
+            The number of FRBs to draw from g_df. Default: 3000
+        weights: (N,) arr or str
+            Weighting of the galaxies to draw FRBs: either an array of weights,
+            or the name of a column in g_df. Default: None
+        DM_sfunc: callable
+            A DM-dependent selection function. It should take as its first argument 
+            an array of DMs and return an array of detection probabilities. Default: None
+        g_sfunc: callable
+            A selection function dependent on properties of the host galaxy. Should take
+            the sampled host galaxy dataframe and return array of probabilities. Default: None
         """
-        reg = self.region
 
-        df = self.read_shell_galaxies(zrange).sample(N, replace=True)
-        DMs = self.get_DMs(df['ipix'], df['x'])
+        if sampled_df is None:
+            if host_df is None:
+                host_df = self.read_shell_galaxies(zrange)
+            sampled_df = host_df.sample(N, replace=True, ignore_index=True, weights=weights)
 
-        res = self.bin_DM_array(DMs, df['ipix'])
+        DMs = self.get_DMs(sampled_df['ipix'], sampled_df['x'])
 
-        if callable(sfunc):
-            P = sfunc(DMs, **sfunc_kwargs)
-            mask = np.random.rand(*DMs.shape) < P
-            res_s = self.bin_DM_array(DMs[mask], df['ipix'][mask])
+        res = self.bin_DM_array(DMs, sampled_df['ipix'])
+
+        if callable(g_sfunc) or callable(DM_sfunc):
+            Ps = np.ones_like(DMs)
+            if callable(g_sfunc):
+                Ps *= g_sfunc(sampled_df)
+            if callable(DM_sfunc):
+                Ps *= DM_sfunc(DMs)
+            mask = np.random.rand(*Ps.shape) < Ps
+            res_s = self.bin_DM_array(DMs[mask], sampled_df['ipix'][mask])
             return res_s, res
 
         return res
