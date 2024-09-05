@@ -106,9 +106,9 @@ class exp_simulation(frb_simulation):
     
     def __init__(self, origin, reg_name, reg=None,
                  name='L205n2500TNG', max_z=0.4, suffix='',
-                 gcat_dir='/data/submit/submit-illustris/april/data/g_cats',
+                 gcat_dir='/ceph/submit/data/group/submit-illustris/april/data/g_cats',
                  scratch_dir='/work/submit/aqc',
-                 results_dir='/data/submit/submit-illustris/april/data/results',
+                 results_dir='/ceph/submit/data/group/submit-illustris/april/data/results',
                  **kwargs):
         
         """
@@ -490,7 +490,7 @@ class exp_simulation(frb_simulation):
         return DMgrid.reshape((N,N)), FRBs_per_pix.reshape((N,N))
 
     def sim_DM_grid(self, sampled_df=None, zrange=None, host_df=None, N=3000, weights=None, 
-                    DM_sfunc=None, g_sfunc=None):
+                    DM_sfunc=None, g_sfunc=None, replace=True):
         """
         Returns the DM grid, placing FRBs in galaxies located within the
         redshift range zrange. 
@@ -523,7 +523,7 @@ class exp_simulation(frb_simulation):
         if sampled_df is None:
             if host_df is None:
                 host_df = self.read_shell_galaxies(zrange)
-            sampled_df = host_df.sample(N, replace=True, ignore_index=True, weights=weights)
+            sampled_df = host_df.sample(N, replace=replace, ignore_index=True, weights=weights)
 
         DMs = self.get_DMs(sampled_df['ipix'], sampled_df['x'])
 

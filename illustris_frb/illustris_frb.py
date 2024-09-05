@@ -19,10 +19,10 @@ class simulation:
     """
     
     def __init__(self, name='L205n2500TNG', binsize=500, sim_dir=None, 
-                 header_file='/data/submit/submit-illustris/april/data/header_info/L205n2500TNG_header.hdf5',
-                 snap_zs_file = '/data/submit/submit-illustris/april/data/header_info/snap_zs.npy', 
-                 emap_dir='/data/submit/submit-illustris/april/data/n_e_maps_500', 
-                 gmap_dir='/data/submit/submit-illustris/april/data/g_maps'):
+                 header_file='/ceph/submit/data/group/submit-illustris/april/data/header_info/L205n2500TNG_header.hdf5',
+                 snap_zs_file = '/ceph/submit/data/group/submit-illustris/april/data/header_info/snap_zs.npy', 
+                 emap_dir='/ceph/submit/data/group/submit-illustris/april/data/n_e_maps_500', 
+                 gmap_dir='/ceph/submit/data/group/submit-illustris/april/data/g_maps'):
         """
         Parameters
         ----------
