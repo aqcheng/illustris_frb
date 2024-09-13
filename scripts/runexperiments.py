@@ -18,7 +18,7 @@ try:
 except:
     import pickle
 
-outpath = '/data/submit/submit-illustris/april/data/C_ells/trial_experiments.pkl'
+outpath = '/ceph/submit/data/group/submit-illustris/april/data/C_ells/trial_experiments.pkl'
 if os.path.exists(outpath):
     res = pickle.load(open(outpath, 'rb'))
 else:
@@ -30,16 +30,19 @@ sim = exp_simulation(origin, 'A1')
 frb_zrange = (0.3, 0.4)
 frb_mean_x = np.mean(sim.comoving_distance(frb_zrange))
 
-g_zrange = (0, 0.2)
+g_zrange = (0.2, 0.3)
 
 ntrials = 5 #per region
-n_frbs = 3000 #FRBs
+n_frbs = 2000 #FRBs
 nbins = 10
 
 def get_sfrweight(df):
     return df['SFR'] / (1 + sim.z_from_dist(df['x']))
 def get_massweight(df):
-    return df['Mass'] / (1 + sim.z_from_dist(df['x']))
+    return df['Stellar Mass'] / (1 + sim.z_from_dist(df['x']))
+
+# host DM log normal, from https://arxiv.org/pdf/2207.14316
+mu, sigma = np.log(43), 1.26
 
 # DM-dependent selection effects
 def DM_sfunc(DMs, a=1): # fiducial selection function
@@ -74,8 +77,7 @@ m_g_tightcutoff = 20.7
 # overlap experiment
 full_zrange = (0,0.4)
 full_meanx = np.mean(sim.comoving_distance(full_zrange))
-g_zranges = ((0, 0.1), (0, 0.2), (0, 0.3), (0, 0.4))
-frb_zranges = ((0.3, 0.4), (0.2, 0.4), (0.1, 0.4))
+frb_zranges = ((0.3, 0.4), (0.2, 0.4), (0.1, 0.4), (0, 0.4))
 
 def savedata(key, data, res=res):
     if key not in res.keys():
@@ -99,12 +101,10 @@ for reg_name in sorted(regions.keys()):
         N_g = sim.Ngal_grid(zrange=g_zrange, m_g_cutoff=m_g_cutoff_)
         N_gs[m_g_cutoff_] = np.array(N_g)
         delta_gs[m_g_cutoff_] = (N_g - np.mean(N_g)) / np.mean(N_g)
+    for key in N_gs.keys():
+        savetosubdict(key, N_gs[key], 'N_gs')
     
     ## for overlap experiments
-    for g_zrange_ in g_zranges:
-        N_g_ = sim.Ngal_grid(zrange=g_zrange_)
-        N_gs[g_zrange_] = np.array(N_g_)
-        delta_gs[g_zrange_] = (N_g_ - np.mean(N_g_)) / np.mean(N_g_)
     full_host_df = sim.read_shell_galaxies()
     full_host_df['sfr_weight'] = get_sfrweight(full_host_df)
     full_host_df['mass_weight'] = get_massweight(full_host_df)
@@ -121,6 +121,7 @@ for reg_name in sorted(regions.keys()):
         host_df = sim.read_shell_galaxies(frb_zrange)
         host_df['sfr_weight'] = get_sfrweight(host_df)
         host_df['mass_weight'] = get_massweight(host_df)
+    savetosubdict('sfr_weight', host_df['sfr_weight'], 'host_properties') #see how often same galaxy is selected multiple times
 
     ## midslice DM
     delta_g = delta_gs[None] #fiducial delta_g
@@ -136,21 +137,7 @@ for reg_name in sorted(regions.keys()):
     fg_g_df = sim.read_shell_galaxies((sim.z_from_dist(0.25*frb_mean_x), sim.z_from_dist(0.75*frb_mean_x)))
     fg_g_df_groups = fg_g_df.groupby('ipix', sort=False)[['theta_', 'phi_', 'x']]
     scatterPs = scattering_sfunc(host_df, fg_g_df_groups)
-    savedata('scatterPs', scatterPs)
-
-    for key in N_gs.keys():
-        savetosubdict(key, N_gs[key], 'N_gs')
-
-    for i, g_zrange_ in enumerate(g_zranges):
-        ells, ClDg = cross_power_estimator(midslice_DM_overlap, delta_gs[g_zrange_], nbins=nbins)
-        DeltaCs = get_Clerr(midslice_DM_overlap, N_gs[g_zrange_], nbins=nbins)
-        savetosubdict(g_zrange_, ClDg, 'overlap_midslice')
-        savetosubdict(g_zrange_, DeltaCs, 'overlap_midslice_DeltaCs')
-
-        ells, ClDg = cross_power_estimator(full_DM, delta_gs[g_zrange_], nbins=nbins)
-        DeltaCs = get_Clerr(midslice_DM_overlap, N_gs[g_zrange_], nbins=nbins)
-        savetosubdict(g_zrange_, ClDg, 'overlap_fullz')
-        savetosubdict(g_zrange_, DeltaCs, 'overlap_fullz_DeltaCs')
+    savetosubdict('scatterPs', scatterPs, 'host_properties')
 
     # EXPERIMENTS
     for _ in range(ntrials):
@@ -179,22 +166,39 @@ for reg_name in sorted(regions.keys()):
         for n_frbs_ in (50, 100, 500, 1000, 2000, 3000):
 
             if n_frbs_ == n_frbs:
+                DM_fid_, mult_fid_ = DM_fid, mult_fid
                 savetosubdict(n_frbs_, ClDg_fid, 'n_frbs_sfrweight')
                 savetosubdict(n_frbs_, ClDg_mass, 'n_frbs_massweight')
             else:
                 DM_fid_, mult_fid_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='sfr_weight')
                 DM_mass_, mult_mass_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='mass_weight')
-                
                 ells, ClDg = cross_oqe(DM_fid_, delta_g, mult_fid_, nbins=nbins)
                 savetosubdict(n_frbs_, ClDg, 'n_frbs_sfrweight')
                 ells, ClDg = cross_oqe(DM_mass_, delta_g, mult_mass_, nbins=nbins)
                 savetosubdict(n_frbs_, ClDg, 'n_frbs_massweight')
+            
+            DM_fid_noreplace_, mult_fid_noreplace_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='sfr_weight', replace=False)
+            ells, ClDg = cross_oqe(DM_fid_noreplace_, delta_g, mult_fid_noreplace_, nbins=nbins)
+            savetosubdict(n_frbs_, ClDg, 'n_frbs_sfrweight_noreplace')
 
-            mult_inds = np.random.choice(sim.region.nside**2, n_frbs_)
-            mult = np.bincount(mult_inds, minlength=sim.region.nside**2).reshape((sim.region.nside, sim.region.nside))
-            DM = np.where(mult > 0, midslice_DM, 0)
-            ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
+            mult_randpix = mult_fid_.flatten()
+            np.random.shuffle(mult_randpix)
+            mult_randpix = mult_randpix.reshape(mult_fid_.shape)
+            DM = np.where(mult_randpix > 0, midslice_DM, 0)
+            ells, ClDg = cross_oqe(DM, delta_g, mult_randpix, nbins=nbins)
             savetosubdict(n_frbs_, ClDg, 'n_frbs_randpixels')
+
+            # host DM
+            host_DM_inds = np.repeat(np.arange(sim.region.nside**2), mult_fid_.flatten())
+            hostDM_vals = np.random.lognormal(mu, sigma, host_DM_inds.shape)
+            hostDM = np.bincount(host_DM_inds, weights=hostDM_vals, 
+                                minlength=sim.region.nside**2).reshape((sim.region.nside,sim.region.nside))
+            hostDM[mult_fid_ > 0] /= mult_fid_[mult_fid_ > 0]
+            ells, ClDg = cross_oqe(DM_fid_ + hostDM, delta_g, mult_fid_, nbins=nbins)
+            savetosubdict(n_frbs_, ClDg, 'n_frbs_injhostDM')
+            hostDM[hostDM > 0] -= np.mean(hostDM[hostDM > 0])
+            ells, ClDg = cross_oqe(DM_fid + hostDM, delta_g, mult_fid_, nbins=nbins)
+            savetosubdict(n_frbs_, ClDg, 'n_frbs_injhostDM_0mean')
 
         ## DM-dependent selection effects
         for a in (1, 2, 5):
@@ -212,17 +216,7 @@ for reg_name in sorted(regions.keys()):
             ells, ClDg = cross_oqe(DM_fid, delta_gs[cutoff], mult_fid, nbins=nbins)
             savetosubdict(cutoff, ClDg, 'm_g_cutoffs')
 
-        ## isolating host DM, isolating FRB placements
-        mu, sigma = np.log(43), 1.26
-        hostDM = np.random.lognormal(mu, sigma, DM_fid.shape)
-        hostDM[mult_fid > 0] /= mult_fid[mult_fid > 0]
-        hostDM[mult_fid == 0] = 0
-        hostDM[mult_fid > 0] -= np.mean(hostDM[mult_fid > 0]) #normalize to 0 mean
-        ells, ClDg = cross_power_estimator(midslice_DM+hostDM, delta_g, nbins=nbins)
-        savedata('midslice_inj_hostDM_ClDgs', ClDg)
-        ells, ClDg = cross_oqe(DM_fid + (hostDM*(mult_fid > 0)), delta_g, mult_fid, nbins=nbins)
-        savedata('fid_inj_hostDM_ClDgs', ClDg)
-
+        ## isolating FRB placements
         midslice_DM_proj = midslice_DM * (mult_fid > 0)
         ells, ClDg = cross_oqe(midslice_DM_proj, delta_g, mult_fid, nbins=nbins)
         savedata('proj_sfrweight_ClDgs', ClDg)
@@ -238,17 +232,15 @@ for reg_name in sorted(regions.keys()):
         savedata('scatter_ClDgs', ClDg)
         
         ## overlap experiments
-        ### different foreground galaxy catalog ranges with 0 < z_frb < 0.4
-        DM_full_sfrweight, mult_full_sfrweight = sim.sim_DM_grid(full_sfr_sample_df)
-        for g_zrange_ in g_zranges:
-            ells, ClDg = cross_oqe(DM_full_sfrweight, delta_gs[g_zrange_], mult_full_sfrweight, nbins=nbins)
-            savetosubdict(g_zrange_, ClDg, 'overlap_g_zranges')
-        ### 0 < z_g < 0.2 with different FRB ranges
+        ### 0.2 < z_g < 0.3 with different FRB ranges
         for frb_zrange_ in frb_zranges:
             if frb_zrange_ == frb_zrange:
                 savetosubdict(frb_zrange_, ClDg_fid, 'overlap_frb_zranges')
                 continue
-            DM, mult = sim.sim_DM_grid(N=n_frbs_, host_df=host_dfs[frb_zrange_], weights='sfr_weight')
+            if frb_zrange_ == full_zrange:
+                DM, mult = sim.sim_DM_grid(full_sfr_sample_df)
+            else:
+                DM, mult = sim.sim_DM_grid(N=n_frbs, host_df=host_dfs[frb_zrange_], weights='sfr_weight')
             ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
             savetosubdict(frb_zrange_, ClDg, 'overlap_frb_zranges')
         
