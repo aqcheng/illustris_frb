@@ -490,7 +490,7 @@ class exp_simulation(frb_simulation):
         return DMgrid.reshape((N,N)), FRBs_per_pix.reshape((N,N))
 
     def sim_DM_grid(self, sampled_df=None, zrange=None, host_df=None, N=3000, weights=None, 
-                    DM_sfunc=None, g_sfunc=None, replace=True):
+                    DM_host_func=None, DM_sfunc=None, g_sfunc=None, replace=True):
         """
         Returns the DM grid, placing FRBs in galaxies located within the
         redshift range zrange. 
@@ -512,6 +512,9 @@ class exp_simulation(frb_simulation):
         weights: (N,) arr or str
             Weighting of the galaxies to draw FRBs: either an array of weights,
             or the name of a column in g_df. Default: None
+        DM_host_func: callable
+            A function which takes a shape as its argument and returns an array of that shape
+            of randomly drawn host DM values
         DM_sfunc: callable
             A DM-dependent selection function. It should take as its first argument 
             an array of DMs and return an array of detection probabilities. Default: None
@@ -519,6 +522,7 @@ class exp_simulation(frb_simulation):
             A selection function dependent on properties of the host galaxy. Should take
             the sampled host galaxy dataframe and return array of probabilities. Default: None
         """
+        nside = self.region.nside
 
         if sampled_df is None:
             if host_df is None:
@@ -528,6 +532,9 @@ class exp_simulation(frb_simulation):
         DMs = self.get_DMs(sampled_df['ipix'], sampled_df['x'])
 
         res = self.bin_DM_array(DMs, sampled_df['ipix'])
+
+        if callable(DM_host_func):
+            DMs += DM_host_func(DMs.shape)
 
         if callable(g_sfunc) or callable(DM_sfunc):
             Ps = np.ones_like(DMs)

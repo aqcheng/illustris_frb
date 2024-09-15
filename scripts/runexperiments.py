@@ -42,7 +42,7 @@ def get_massweight(df):
     return df['Stellar Mass'] / (1 + sim.z_from_dist(df['x']))
 
 # host DM log normal, from https://arxiv.org/pdf/2207.14316
-mu, sigma = np.log(43), 1.26
+mu, sigma = 1.93 / np.log10(np.e), 0.41 / np.log10(np.e)
 
 # DM-dependent selection effects
 def DM_sfunc(DMs, a=1): # fiducial selection function
