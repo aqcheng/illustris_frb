@@ -59,11 +59,12 @@ def scattering_sfunc(host_g_df, fg_g_df_groups, P_scatter_func=P_scattering):
     host_g_df['scatter P'] = 1.
     host_g_df_groups = host_g_df.groupby('ipix', sort=False)[['theta_', 'phi_']]
     for host_ipix in host_g_df_groups.groups.keys():
-        host = host_g_df_groups.get_group(host_ipix)
-        fg = fg_g_df_groups.get_group(host_ipix)
-        cdists = np.array(fg['x']) * np.sin(np.array(fg['theta_'])) * cdist(np.array(host), np.array(fg[['theta_', 'phi_']]))
-        Ps = P_scatter_func(cdists)
-        host_g_df.loc[host.index, 'scatter P'] = np.prod(Ps, axis=1)
+        if host_ipix in fg_g_df_groups.groups.keys():
+            host = host_g_df_groups.get_group(host_ipix)
+            fg = fg_g_df_groups.get_group(host_ipix)
+            cdists = np.array(fg['x']) * np.sin(np.array(fg['theta_'])) * cdist(np.array(host), np.array(fg[['theta_', 'phi_']]))
+            Ps = P_scatter_func(cdists)
+            host_g_df.loc[host.index, 'scatter P'] = np.prod(Ps, axis=1)
     return host_g_df['scatter P']
 
 # apparent magnitude cuts
@@ -153,7 +154,7 @@ for reg_name in sorted(regions.keys()):
         savetosubdict('DM_mass', DM_mass, 'trial_DM_fields')
         savetosubdict('mult_mass', mult_mass, 'trial_DM_fields')
 
-        # save DM vs x
+        ## save DM vs x
         DM_arr = sim.get_DMs(full_sfr_sample_df['ipix'], full_sfr_sample_df['x'])
         savetosubdict('DM', DM_arr, 'fullz_FRB_properties')
         savetosubdict('ipix', full_sfr_sample_df['ipix'], 'fullz_FRB_properties')
@@ -166,50 +167,66 @@ for reg_name in sorted(regions.keys()):
         for n_frbs_ in (50, 100, 500, 1000, 2000, 3000):
 
             if n_frbs_ == n_frbs:
+                sfr_sample_df_, full_sfr_sample_df_ = sfr_sample_df, full_sfr_sample_df
                 DM_fid_, mult_fid_ = DM_fid, mult_fid
                 savetosubdict(n_frbs_, ClDg_fid, 'n_frbs_sfrweight')
                 savetosubdict(n_frbs_, ClDg_mass, 'n_frbs_massweight')
             else:
-                DM_fid_, mult_fid_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='sfr_weight')
-                DM_mass_, mult_mass_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='mass_weight')
+                sfr_sample_df_ = host_df.sample(n_frbs_, replace=True, ignore_index=True, weights='sfr_weight')
+                mass_sample_df_ = host_df.sample(n_frbs_, replace=True, ignore_index=True, weights='mass_weight')
+                DM_fid_, mult_fid_ = sim.sim_DM_grid(sfr_sample_df_, N=n_frbs_)
+                DM_mass_, mult_mass_ = sim.sim_DM_grid(mass_sample_df_, N=n_frbs_)
                 ells, ClDg = cross_oqe(DM_fid_, delta_g, mult_fid_, nbins=nbins)
                 savetosubdict(n_frbs_, ClDg, 'n_frbs_sfrweight')
                 ells, ClDg = cross_oqe(DM_mass_, delta_g, mult_mass_, nbins=nbins)
                 savetosubdict(n_frbs_, ClDg, 'n_frbs_massweight')
+
+            ### one FRB per pixel, random distances within 0.3 < z <= 0.4
+
             
-            DM_fid_noreplace_, mult_fid_noreplace_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='sfr_weight', replace=False)
-            ells, ClDg = cross_oqe(DM_fid_noreplace_, delta_g, mult_fid_noreplace_, nbins=nbins)
-            savetosubdict(n_frbs_, ClDg, 'n_frbs_sfrweight_noreplace')
+            # DM_fid_noreplace_, mult_fid_noreplace_ = sim.sim_DM_grid(N=n_frbs_, host_df=host_df, weights='sfr_weight', replace=False)
+            # ells, ClDg = cross_oqe(DM_fid_noreplace_, delta_g, mult_fid_noreplace_, nbins=nbins)
+            # savetosubdict(n_frbs_, ClDg, 'n_frbs_sfrweight_noreplace')
 
             mult_randpix = mult_fid_.flatten()
             np.random.shuffle(mult_randpix)
             mult_randpix = mult_randpix.reshape(mult_fid_.shape)
+            
             DM = np.where(mult_randpix > 0, midslice_DM, 0)
             ells, ClDg = cross_oqe(DM, delta_g, mult_randpix, nbins=nbins)
             savetosubdict(n_frbs_, ClDg, 'n_frbs_randpixels')
 
             # host DM
-            host_DM_inds = np.repeat(np.arange(sim.region.nside**2), mult_fid_.flatten())
-            hostDM_vals = np.random.lognormal(mu, sigma, host_DM_inds.shape)
-            hostDM = np.bincount(host_DM_inds, weights=hostDM_vals, 
-                                minlength=sim.region.nside**2).reshape((sim.region.nside,sim.region.nside))
-            hostDM[mult_fid_ > 0] /= mult_fid_[mult_fid_ > 0]
-            ells, ClDg = cross_oqe(DM_fid_ + hostDM, delta_g, mult_fid_, nbins=nbins)
+            DM_withhost, mult_withhost = sim.sim_DM_grid(sfr_sample_df_, N=n_frbs_, 
+                                                 DM_host_func=lambda x: np.random.lognormal(mu, sigma, x))
+            ells, ClDg = cross_oqe(DM_withhost, delta_g, mult_withhost, nbins=nbins)
             savetosubdict(n_frbs_, ClDg, 'n_frbs_injhostDM')
-            hostDM[hostDM > 0] -= np.mean(hostDM[hostDM > 0])
-            ells, ClDg = cross_oqe(DM_fid + hostDM, delta_g, mult_fid_, nbins=nbins)
-            savetosubdict(n_frbs_, ClDg, 'n_frbs_injhostDM_0mean')
 
         ## DM-dependent selection effects
         for a in (1, 2, 5):
             (DM, mult), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, DM_sfunc=lambda x: DM_sfunc(x, a=a))
             ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
             savetosubdict(a, ClDg, 'DM_sfunc')
+
+            # combine with injecting host DM
+            (DM, mult), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, 
+                                            DM_host_func=lambda x: np.random.lognormal(mu, sigma, x),
+                                            DM_sfunc=lambda x: DM_sfunc(x, a=a))
+            ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
+            savetosubdict(a, ClDg, 'DM_sfunc_injhostDM')
         
         for DM_cutoff in (600, 800, 1000):
             (DM, mult), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, DM_sfunc=lambda x: x < DM_cutoff)
             ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
             savetosubdict(DM_cutoff, ClDg, 'DM_cutoffs')
+
+            # combine with injecting host DM
+            (DM, mult), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, 
+                                            DM_host_func=lambda x: np.random.lognormal(mu, sigma, x),
+                                            DM_sfunc=lambda x: x < DM_cutoff)
+            ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
+            savetosubdict(a, ClDg, 'DM_cutoffs_injhostDM')
+
         
         ## apparent magnitude cutoffs
         for cutoff in (m_g_cutoff, m_g_tightcutoff):
@@ -221,9 +238,9 @@ for reg_name in sorted(regions.keys()):
         ells, ClDg = cross_oqe(midslice_DM_proj, delta_g, mult_fid, nbins=nbins)
         savedata('proj_sfrweight_ClDgs', ClDg)
 
-        midslice_DM_proj_mass = midslice_DM * (mult_mass > 0)
-        ells, ClDg = cross_oqe(midslice_DM_proj_mass, delta_g, mult_fid, nbins=nbins)
-        savedata('proj_massweight_ClDgs', ClDg)
+        # midslice_DM_proj_mass = midslice_DM * (mult_mass > 0)
+        # ells, ClDg = cross_oqe(midslice_DM_proj_mass, delta_g, mult_fid, nbins=nbins)
+        # savedata('proj_massweight_ClDgs', ClDg)
 
         ## scattering 
         (DM_s, mult_s), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, 

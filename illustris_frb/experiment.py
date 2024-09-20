@@ -304,6 +304,18 @@ class exp_simulation(frb_simulation):
                 df = df[ df['x'] <= xrange[1] ]
             dfs.append(df.copy(deep=True))
         return pd.concat(dfs, ignore_index=True)
+
+    def process_magnitudes(self):
+        """
+        Keeps only subhalos with stars (M_g < 0), and computes the luminosity distance and
+        apparent magnitude.
+        """
+        for shellpath in sorted([path for path in os.listdir(self.gcat_path) if path.endswith('.hdf5')]):
+            df = pd.read_hdf(os.path.join(self.gcat_path, shellpath))
+            df = df[df['M_g'] < 0]
+            df['d_L'] = self.cosmo.luminosity_distance(self.z_from_dist(df['x'])).value #in Mpc
+            df['m_g'] = 5*np.log10(df['d_L'] * 1e6) - 5 + df['M_g']
+            df.to_hdf(os.path.join(self.gcat_path, shellpath), key='data', mode='w')
     
     def Ngal_grid(self, zrange=None, df=None, mass_cutoff=None, m_g_cutoff=None):
         """
@@ -323,16 +335,14 @@ class exp_simulation(frb_simulation):
             
             for i, snap in enumerate(np.asarray(snaps)):
                 df = pd.read_hdf(self.get_shell_path(snap))
+                if m_g_cutoff is not None:
+                    df = df[ df['m_g'] < m_g_cutoff ]
                 if i==0:
                     df = df[ df['x'] >= xrange[0] ]
                 if i==len(snaps)-1:
                     df = df[ df['x'] <= xrange[1] ]
                 if mass_cutoff is not None:
                     df = df[ df['Mass'] > mass_cutoff ]
-                if m_g_cutoff is not None:
-                    if 'm_g' not in df.columns:
-                        df['m_g'] = 5*np.log10(df['x'] * 1000 / self.h) - 5 + df['M_g']
-                    df = df[ df['m_g'] < m_g_cutoff ]
                 
                 g_counts += np.bincount(df['ipix'], minlength=self.region.nside**2)
 
@@ -531,10 +541,10 @@ class exp_simulation(frb_simulation):
 
         DMs = self.get_DMs(sampled_df['ipix'], sampled_df['x'])
 
-        res = self.bin_DM_array(DMs, sampled_df['ipix'])
-
         if callable(DM_host_func):
             DMs += DM_host_func(DMs.shape)
+
+        res = self.bin_DM_array(DMs, sampled_df['ipix'])
 
         if callable(g_sfunc) or callable(DM_sfunc):
             Ps = np.ones_like(DMs)
