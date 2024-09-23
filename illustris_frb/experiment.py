@@ -294,7 +294,7 @@ class exp_simulation(frb_simulation):
             zrange = (0, self.max_z)
         xrange = self.comoving_distance(zrange)
         snaps = np.arange(self.closest_snap(xrange[0]),
-                          self.closest_snap(xrange[1]+1), -1)
+                          self.closest_snap(xrange[1])-1, -1)
         dfs = []
         for i, snap in enumerate(np.asarray(snaps)):
             df = pd.read_hdf(self.get_shell_path(snap))
