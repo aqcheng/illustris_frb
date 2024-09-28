@@ -532,7 +532,6 @@ class exp_simulation(frb_simulation):
             A selection function dependent on properties of the host galaxy. Should take
             the sampled host galaxy dataframe and return array of probabilities. Default: None
         """
-        nside = self.region.nside
 
         if sampled_df is None:
             if host_df is None:

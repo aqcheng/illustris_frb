@@ -50,20 +50,24 @@ def DM_sfunc(DMs, a=1): # fiducial selection function
     return np.exp( -(2/3)*(np.log10(DMs*a)-3)**2 )
 
 # galaxy selection effects
-def P_scattering(fg_galaxy_bs, r50 = 8*sim.h): #50% probability at 8 kpc, 1 - 2**((-r/r50)**2)
+def P_scattering(fg_galaxy_bs, r50 = 15*sim.h): #50% probability at 20 kpc, 1 - 2**((-r/r50)**2)
     Ps = 1 - np.power(2, -(fg_galaxy_bs/r50)**2)
     return Ps
-def scattering_sfunc(host_g_df, fg_g_df_groups, P_scatter_func=P_scattering):
+def scattering_sfunc(host_g_df, fg_g_df_groups, P_scatter_func=P_scattering, **kwargs):
     if 'scatter P' in host_g_df.columns:
         return np.array(host_g_df['scatter P'])
     host_g_df['scatter P'] = 1.
-    host_g_df_groups = host_g_df.groupby('ipix', sort=False)[['theta_', 'phi_']]
+    host_g_df_groups = host_g_df.groupby('ipix', sort=False)[['theta_', 'phi_', 'x']]
     for host_ipix in host_g_df_groups.groups.keys():
         if host_ipix in fg_g_df_groups.groups.keys():
             host = host_g_df_groups.get_group(host_ipix)
             fg = fg_g_df_groups.get_group(host_ipix)
-            cdists = np.array(fg['x']) * np.sin(np.array(fg['theta_'])) * cdist(np.array(host), np.array(fg[['theta_', 'phi_']]))
-            Ps = P_scatter_func(cdists)
+            fg = fg[ fg['x'] < host['x'].max() ]
+            cdists = np.array(fg['x'] / (1 + sim.z_from_dist(fg['x']))) * np.sin(np.array(fg['theta_'])) * \
+                     cdist(np.array(host[['theta_', 'phi_']]), np.array(fg[['theta_', 'phi_']]))
+            nhost, nfg = len(host), len(fg)
+            Ps = np.where(np.tile(np.array(host['x']), (nfg, 1)).T > np.tile(np.array(fg['x']), (nhost, 1)), 
+                          P_scatter_func(cdists, **kwargs), 1)
             host_g_df.loc[host.index, 'scatter P'] = np.prod(Ps, axis=1)
     return host_g_df['scatter P']
 
@@ -135,8 +139,7 @@ for reg_name in sorted(regions.keys()):
     savetosubdict('DeltaCs', midslice_DeltaCs, 'midslice')
 
     ## for impact parameter selection effects
-    fg_g_df = sim.read_shell_galaxies((sim.z_from_dist(0.25*frb_mean_x), sim.z_from_dist(0.75*frb_mean_x)))
-    fg_g_df_groups = fg_g_df.groupby('ipix', sort=False)[['theta_', 'phi_', 'x']]
+    fg_g_df_groups = full_host_df.groupby('ipix', sort=False)[['theta_', 'phi_', 'x']]
     scatterPs = scattering_sfunc(host_df, fg_g_df_groups)
     savetosubdict('scatterPs', scatterPs, 'host_properties')
 
@@ -207,6 +210,9 @@ for reg_name in sorted(regions.keys()):
             (DM, mult), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, DM_sfunc=lambda x: DM_sfunc(x, a=a))
             ells, ClDg = cross_oqe(DM, delta_g, mult, nbins=nbins)
             savetosubdict(a, ClDg, 'DM_sfunc')
+            
+            savetosubdict(f'DM_sfunc_{a}', DM, 'trial_DM_fields')
+            savetosubdict(f'mult_sfunc_{a}', mult, 'trial_DM_fields')
 
             # combine with injecting host DM
             (DM, mult), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, 
@@ -243,8 +249,10 @@ for reg_name in sorted(regions.keys()):
         # savedata('proj_massweight_ClDgs', ClDg)
 
         ## scattering 
-        (DM_s, mult_s), _ = sim.sim_DM_grid(sampled_df=sfr_sample_df, 
-                                            g_sfunc=lambda x: scattering_sfunc(x, fg_g_df_groups))
+        (DM_s, mult_s), (DM_, mult_) = sim.sim_DM_grid(sampled_df=sfr_sample_df, 
+                                            g_sfunc=lambda x: np.array(x['scatter P']))
+        savetosubdict('DM_scatter', DM_s, 'trial_DM_fields')
+        savetosubdict('mult_scatter', mult_s, 'trial_DM_fields')
         ells, ClDg = cross_oqe(DM_s, delta_g, mult_s, nbins=nbins)
         savedata('scatter_ClDgs', ClDg)
         
