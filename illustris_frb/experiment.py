@@ -487,20 +487,25 @@ class exp_simulation(frb_simulation):
         pixs = np.arange(N**2).reshape((N,N))
         return self.get_DMs(pixs, x_max_)
 
-    def bin_DM_array(self, DMs, ipix):
+    def bin_into_array(self, ipix, *args):
         """
-        Puts an a list of DMs into a grid of their corresponding pixels, taking
-        averages where needed. Returns a DM and FRB count grid.
+        For each array in *args (e.g. a DM array), puts the values into a grid
+        of their corresponding pixels, taking averages where needed. Returns DM
+        grid(s) and FRB count grid. Can be used to bin other quantities as well
+        (e.g. FRB distances).
         """
         N = self.region.nside
-        DMgrid = np.zeros(N**2)
-        np.add.at(DMgrid, ipix, DMs)
         FRBs_per_pix = np.bincount(ipix, minlength=N**2)
-        DMgrid[ FRBs_per_pix > 1 ] /= FRBs_per_pix[ FRBs_per_pix > 1 ] 
-        return DMgrid.reshape((N,N)), FRBs_per_pix.reshape((N,N))
+        res = []
+        for DMs in args:
+            DMgrid = np.zeros(N**2)
+            np.add.at(DMgrid, ipix, DMs)
+            DMgrid[ FRBs_per_pix > 1 ] /= FRBs_per_pix[ FRBs_per_pix > 1 ] 
+            res.append(DMgrid.reshape((N,N)))
+        return *res, FRBs_per_pix.reshape((N,N))
 
-    def sim_DM_grid(self, sampled_df=None, zrange=None, host_df=None, N=3000, weights=None, 
-                    DM_host_func=None, DM_sfunc=None, g_sfunc=None, replace=True):
+    def sim_DM_grid(self, sampled_df=None, zrange=None, host_df=None, N=2000, weights=None, 
+                    DM_host_func=None, DM_sfunc=None, g_sfunc=None, replace=True, return_x1z=False):
         """
         Returns the DM grid, placing FRBs in galaxies located within the
         redshift range zrange. 
@@ -531,6 +536,10 @@ class exp_simulation(frb_simulation):
         g_sfunc: callable
             A selection function dependent on properties of the host galaxy. Should take
             the sampled host galaxy dataframe and return array of probabilities. Default: None
+        replace: bool
+            Whether to sample host galaxies with replacement. Default: True
+        return_x1z: bool
+            Whether to return the grid of x * (1+z) of the FRBs. Default: False
         """
 
         if sampled_df is None:
@@ -543,7 +552,11 @@ class exp_simulation(frb_simulation):
         if callable(DM_host_func):
             DMs += DM_host_func(DMs.shape)
 
-        res = self.bin_DM_array(DMs, sampled_df['ipix'])
+        if return_x1z:
+            x1z = sampled_df['x'] * (1+self.z_from_dist(sampled_df['x']))
+            res = self.bin_into_array(sampled_df['ipix'], DMs, x1z)
+        else:
+            res = self.bin_into_array(sampled_df['ipix'], DMs)
 
         if callable(g_sfunc) or callable(DM_sfunc):
             Ps = np.ones_like(DMs)
@@ -552,7 +565,11 @@ class exp_simulation(frb_simulation):
             if callable(DM_sfunc):
                 Ps *= DM_sfunc(DMs)
             mask = np.random.rand(*Ps.shape) < Ps
-            res_s = self.bin_DM_array(DMs[mask], sampled_df['ipix'][mask])
+            if return_x1z:
+                x1z_s = sampled_df['x'][mask] * (1+self.z_from_dist(sampled_df['x'][mask]))
+                res_s = self.bin_into_array(sampled_df['ipix'][mask], DMs[mask], x1z_s)
+            else:
+                res_s = self.bin_into_array(sampled_df['ipix'][mask], DMs[mask])
             return res_s, res
 
         return res
