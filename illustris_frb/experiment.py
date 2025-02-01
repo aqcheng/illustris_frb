@@ -350,11 +350,11 @@ class exp_simulation(frb_simulation):
         
         df_ = df.copy(deep=True)
         if mass_cutoff is not None:
-            df_ = df_[ df['Mass'] > mass_cutoff ]
+            df_ = df_.loc[ df['Mass'] > mass_cutoff ]
         if m_g_cutoff is not None:
             if 'm_g' not in df.columns:
                 df_['m_g'] = 5*np.log10(df_['x'] * 1000 / self.h) - 5 + df_['M_g']
-            df_= df_[ df_['m_g'] < m_g_cutoff ]
+            df_= df_.loc[ df_['m_g'] < m_g_cutoff ]
     
         return np.bincount(df_['ipix'], minlength=self.region.nside**2)
     
