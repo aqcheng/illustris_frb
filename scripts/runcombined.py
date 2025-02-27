@@ -1,9 +1,8 @@
 """
 This is the script for the run with all effects combined, all 48 regions, 5 trials per region. 
 Total list of effects:
-    - Vary total number of FRBs
     - Test two FRB redshift ranges (a proper background slice, and the whole cone)
-    - Putting FRBs in galaxies (weighted by SFR)
+    - Putting FRBs in galaxies (weighted by SFR) with a host apparent magnitude cut
     - Injecting a host DM
     - DM-dependent selection effects
     - Scattering selection effects
@@ -20,6 +19,7 @@ import os
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
+import astropy.units as u
 try:
     import _pickle as pickle
 except:
@@ -27,9 +27,9 @@ except:
 
 outpath = '/ceph/submit/data/group/submit-illustris/april/data/C_ells/combined_experiment.pkl'
 if os.path.exists(outpath):
-    res = pickle.load(open(outpath, 'rb'))
-else:
-    res = {'regions': [], 'slice_exp': {}, 'full_exp': {}}
+    # res = pickle.load(open(outpath, 'rb'))
+    os.remove(outpath)  
+res = {'regions': [], 'slice_exp': {}, 'full_exp': {}}
 
 origin = 500 * np.array([50, 70, 23])
 sim = exp_simulation(origin, 'A1')
@@ -43,8 +43,13 @@ g_zrange = (0.2, 0.3)
 ntrials = 5 #per region
 nbins = 10
 
+n_frbs = 2000
+
 def get_sfrweight(df):
     return df['SFR'] / (1 + sim.z_from_dist(df['x']))
+def get_optical_loc_weight(df, cutoff=20.7):
+    ### for an abrupt magnitude cut
+    return get_sfrweight(df) * (df['m_g'] < cutoff).astype(int)
 
 # host DM log normal, from https://arxiv.org/pdf/2207.14316
 mu, sigma = 1.93 / np.log10(np.e), 0.41 / np.log10(np.e)
@@ -54,26 +59,36 @@ def DM_sfunc(DMs, a=1): # fiducial selection function
     # a is how many factors to squish the selection function
     return np.exp( -(2/3)*(np.log10(DMs*a)-3)**2 )
 
-# galaxy selection effects
-def P_scattering(fg_galaxy_bs, r50 = 15*sim.h): #50% probability at 20 kpc, 1 - 2**((-r/r50)**2)
-    Ps = 1 - np.power(2, -(fg_galaxy_bs/r50)**2)
-    return Ps
-def scattering_sfunc(host_g_df, fg_g_df_groups, P_scatter_func=P_scattering):
-    if 'scatter P' in host_g_df.columns:
-        return np.array(host_g_df['scatter P'])
+# NEW GALAXY SELECTION EFFECTS
+def scattering_timescale(bs, fg_zs, frb_zs, f=600, r50 = 4, L=1*u.kpc): 
+    # observing frequency of 600 MHz
+    # characteristic impact parameter for scattering 4 kpc
+    # thickness of scattering medium 1 kpc
+    d_go = sim.cosmo.lookback_distance(fg_zs) # galaxy observer distance
+    d_fo = np.atleast_2d(sim.cosmo.lookback_distance(frb_zs)).T # frb observer distance
+    d_fg = d_fo - d_go #nhost, nfg
+    G = 2 * d_fg * d_go / (d_fo * L)
+    taus = 0.3 * G * np.power(2, -(bs/r50)**2) / \
+           ((1 + fg_zs**3) * ((f/1000)**4)) # in ms
+    taus = np.where(taus < 0, 0, taus) # no scattering for galaxies in background
+    # impact parameters are given pairwise in (nhost, nfg)
+    return np.sum(taus, axis=1) # total scattering over all intervening galaxies for each host galaxy
+
+def scattering_sfunc(host_g_df, fg_g_df_groups):
     host_g_df['scatter P'] = 1.
     host_g_df_groups = host_g_df.groupby('ipix', sort=False)[['theta_', 'phi_', 'x']]
-    for host_ipix in host_g_df_groups.groups.keys():
+    for host_ipix in host_g_df_groups.groups.keys(): # only look at foreground galaxies with same pixels as FRB
         if host_ipix in fg_g_df_groups.groups.keys():
             host = host_g_df_groups.get_group(host_ipix)
             fg = fg_g_df_groups.get_group(host_ipix)
             fg = fg[ fg['x'] < host['x'].max() ]
-            cdists = np.array(fg['x'] / (1 + sim.z_from_dist(fg['x']))) * np.sin(np.array(fg['theta_'])) * \
-                     cdist(np.array(host[['theta_', 'phi_']]), np.array(fg[['theta_', 'phi_']]))
-            nhost, nfg = len(host), len(fg)
-            Ps = np.where(np.tile(np.array(host['x']), (nfg, 1)).T > np.tile(np.array(fg['x']), (nhost, 1)), 
-                          P_scatter_func(cdists), 1)
-            host_g_df.loc[host.index, 'scatter P'] = np.prod(Ps, axis=1)
+            #pairwise impact parameters, (nhost, nfg) for this pixel
+            cdists = np.sin(np.array(fg['theta_'])) * \
+                     cdist(np.array(host[['theta_', 'phi_']]), np.array(fg[['theta_', 'phi_']])) / \
+                     (sim.cosmo.arcsec_per_kpc_proper(sim.z_from_dist(np.array(fg['x']))).to(u.rad/u.kpc).value) #arcsec to radians
+            taus = scattering_timescale(cdists, sim.z_from_dist(fg['x']), sim.z_from_dist(host['x']))
+            Ps = np.power(2, -taus**2)
+            host_g_df.loc[host.index, 'scatter P'] = Ps
     return host_g_df['scatter P']
 
 # apparent magnitude cuts
@@ -106,15 +121,15 @@ for reg_name in sorted(regions.keys()):
     delta_g_nocutoff = (N_g_nocutoff - np.mean(N_g_nocutoff)) / np.mean(N_g_nocutoff)
     
     full_host_df = sim.read_shell_galaxies()
-    full_host_df['sfr_weight'] = get_sfrweight(full_host_df)
+    full_host_df['weights'] = get_optical_loc_weight(full_host_df)
 
     ## for impact parameter selection effects
     fg_g_df_groups = full_host_df.groupby('ipix', sort=False)[['theta_', 'phi_', 'x']]
     scatterPs = scattering_sfunc(full_host_df, fg_g_df_groups)
-    savetosubdict('full', scatterPs, 'scatterPs')
+    savedata('scatterPs_full', np.array(scatterPs))
 
     slice_host_df = pd.DataFrame(full_host_df.loc[ (full_host_df['x'] > frb_xrange[0]) & (full_host_df['x'] <= frb_xrange[1]) ])
-    savetosubdict('slice', np.array(slice_host_df['scatter P']), 'scatterPs')
+    savedata('scatterPs_slice', np.array(slice_host_df['scatter P']))
 
     midslice_DM = sim.DM_grid(x_max=frb_mean_x)
     full_DM = sim.DM_grid()
@@ -135,29 +150,28 @@ for reg_name in sorted(regions.keys()):
 
     # experiments - combined effects
 
-    for host_df, res_subdict in zip([slice_host_df, full_host_df], [res['slice_exp'], res['full_exp']]):
+    for host_df, res_key in zip([slice_host_df, full_host_df], ['slice_exp', 'full_exp']):
 
         for _ in range(ntrials):
 
-            for n_frbs_ in (50, 500, 1000, 2000, 3000):
+            (DM_exp, mult_exp), (DM, mult) = sim.sim_DM_grid(
+                N=n_frbs, host_df=host_df, weights='weights',
+                DM_host_func=lambda x: np.random.lognormal(mu, sigma, x),
+                DM_sfunc=lambda x: DM_sfunc(x, a=2),
+                g_sfunc=lambda x: np.array(x['scatter P'])
+            )
 
-                (DM_exp, mult_exp), (DM, mult) = sim.sim_DM_grid(
-                    N=n_frbs_, host_df=host_df, weights='sfr_weight',
-                    DM_host_func=lambda x: np.random.lognormal(mu, sigma, x),
-                    DM_sfunc=lambda x: DM_sfunc(x, a=2),
-                    g_sfunc=lambda x: np.array(x['scatter P'])
-                )
-
-                savetosubdict(n_frbs_, DM_exp, 'DM_exp', res=res_subdict)
-                savetosubdict(n_frbs_, mult_exp, 'mult_exp', res=res_subdict)
-                savetosubdict(n_frbs_, DM, 'DM', res=res_subdict)
-                savetosubdict(n_frbs_, mult, 'mult', res=res_subdict)
-                
-                ells, ClDg = cross_oqe(DM_exp, delta_g, mult_exp, nbins=nbins)
-                savetosubdict(n_frbs_, ClDg, 'ClDgs_exp', res=res_subdict)
-                ells, ClDg = cross_oqe(DM, delta_g_nocutoff, mult, nbins=nbins)
-                savetosubdict(n_frbs_, ClDg, 'ClDgs', res=res_subdict)
+            savetosubdict('DM_exp', DM_exp, res_key)
+            savetosubdict('mult_exp', mult_exp, res_key)
+            savetosubdict('DM', DM, res_key)
+            savetosubdict('mult', mult, res_key)
+            
+            ells, ClDg = cross_oqe(DM_exp, delta_g, mult_exp, nbins=nbins)
+            savetosubdict('ClDgs_exp', ClDg, res_key)
+            ells, ClDg = cross_oqe(DM, delta_g_nocutoff, mult, nbins=nbins)
+            savetosubdict('ClDgs', ClDg, res_key)
                 
     res['regions'].append(reg_name)
-    with open(outpath, 'wb') as f:
-        pickle.dump(res, f)
+
+with open(outpath, 'wb') as f:
+    pickle.dump(res, f)

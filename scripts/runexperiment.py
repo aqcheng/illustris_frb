@@ -52,7 +52,7 @@ def DM_sfunc(DMs, a=1): # fiducial selection function
     # a is how many factors to squish the selection function
     return np.exp( -(2/3)*(np.log10(DMs*a)-3)**2 )
 
-# galaxy selection effects
+# galaxy selection effects - NOW DEPRECATED
 def P_scattering(fg_galaxy_bs, r50 = 15*sim.h): #50% probability at 15 kpc, 1 - 2**((-r/r50)**2)
     Ps = 1 - np.power(2, -(fg_galaxy_bs/r50)**2)
     return Ps
