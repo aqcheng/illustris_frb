@@ -77,8 +77,11 @@ def sort_chunks_to_bins(sim, snap, density):
         
         # mem = process.memory_info().rss/1024**3
         # print(f'{time.time()-start_time:<6.2f}: Done with chunk {chunk}. Current memory: {mem:.1f} GB')
-    res = res[:-1,:-1,:-1].reshape(-1)
-    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res)
+    
+    # Saving the sliced array without flattening prevents a full copy, saving a factor of 2 in memory.
+    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res[:-1,:-1,:-1])
+    #res_flat = res[:-1,:-1,:-1].reshape(-1)
+    #np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res_flat)
 
 
 
