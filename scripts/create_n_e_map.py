@@ -27,7 +27,7 @@ full_snaps = (2, 3, 4, 6, 8, 11, 13, 17, 21, 25, 33, 40, 50, 59, 67, 72, 78, 84,
 def sort_chunks_to_bins(sim, snap):
     
     full_snap = snap in full_snaps
-    res = np.zeros(sim.n_bins**3)
+    res = np.zeros(sim.n_bins**3, dtype=np.float64)
     
     for chunk in range(len(os.listdir(sim.get_snapdir_path(snap)))):
 
@@ -40,8 +40,9 @@ def sort_chunks_to_bins(sim, snap):
             coords = np.array(f['PartType0/Coordinates'])
 
             #calculate electron number count; N_e = m_g eta_e X_H / m_p
-
-            m_g = (np.array(f['PartType0/Masses'], dtype=np.float64) * 1e10 * u.solMass / cu.littleh).to(u.kg, sim.h_equiv)
+            m_g = (np.array(f['PartType0/Masses'], dtype=np.float64) * 1e10 * u.solMass / cu.littleh)
+            simH0 = 100 * u.km/u.s/u.Mpc * sim.h
+            m_g = m_g.to(u.kg, cu.with_H0(simH0))
             eta_e = np.array(f['PartType0/ElectronAbundance'])
 
             #X_H only given in full snaps
@@ -62,8 +63,8 @@ def sort_chunks_to_bins(sim, snap):
         
         # mem = process.memory_info().rss/1024**3
         # print(f'{time.time()-start_time:<6.2f}: Done with chunk {chunk}. Current memory: {mem:.1f} GB')
-
-    np.save(os.path.join(sim.map_dir, f'{snap}.npy'), res)
+    print(sim.emap_dir)
+    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res)
 
 
 #set argparse
@@ -73,10 +74,10 @@ argp.add_argument("-s", "--sim", type=str, required=True, choices=os.listdir('/h
 argp.add_argument("--binsize", type=int, default=500, help="The size of a bin in ckpc/h. Default=500")
 argp.add_argument("--snaps", type=int, default=[99], nargs='+', help="Which snapshots to process. Default=99")
 argp.add_argument("--snap-range", type=int, nargs=2, help="Range of snapshots to process, inclusive. Ignores --snaps if specified. ")
-argp.add_argument("--outpath", type=str, default=None, help="Path to where the output electron density map will go. If unspecified, will go to ./n_e_maps/{sim}")
+argp.add_argument("--outpath", type=str, default='./n_e_maps', help="Path to where the output electron density map will go. If unspecified, will go to ./n_e_maps/{sim}")
 args = argp.parse_args()
 
-sim = simulation(args.sim, args.binsize, map_dir=args.outpath)
+sim = simulation(args.sim, args.binsize, emap_dir=args.outpath)
 
 if args.snap_range is None:
     snaps_list = args.snaps
@@ -88,7 +89,7 @@ else:
         snaps_list = range(a, b+1)
 
 #run
-print(f'{n_bins}^3 = {n_bins**3} bins of size {binsize} ckpc/h')
+print(f'{sim.n_bins}^3 = {sim.n_bins**3} bins of size {sim.binsize} ckpc/h')
 
 start_time = time.time()
 for snap in snaps_list:
