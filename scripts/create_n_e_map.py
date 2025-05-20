@@ -68,9 +68,10 @@ def sort_chunks_to_bins(sim, snap, density):
         N_e = m_g * eta_e * X_H / (const.m_p * pixel_volume)
         N_e = N_e.astype(dtype)
 
-        bin_index = (coords[:,0] // sim.binsize)*n_bins_padded**2 + \
-                    (coords[:,1] // sim.binsize)*n_bins_padded + \
-                    (coords[:,2]  // sim.binsize)
+        # mod by boxsize seems to be nessisary, since for some reason, 0 < coords <= boxsize.
+        bin_index = ((coords[:,0] % sim.boxsize) // sim.binsize)*n_bins_padded**2 + \
+                    ((coords[:,1] % sim.boxsize) // sim.binsize)*n_bins_padded + \
+                    ((coords[:,2] % sim.boxsize) // sim.binsize)
         bin_index = bin_index.astype(int)
 
         np.add.at(res_flat, bin_index, N_e.value)
