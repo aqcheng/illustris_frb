@@ -52,7 +52,6 @@ def sort_chunks_to_bins(sim, snap, density):
         with h5py.File(chunk_path) as f:
 
             coords = np.array(f['PartType0/Coordinates'])
-            print(coords.shape, np.max(coords, 0), np.min(coords, 0))
 
             #calculate electron number count; N_e = m_g eta_e X_H / m_p
             m_g = (np.array(f['PartType0/Masses'], dtype=np.float64) * 1e10 * u.solMass / cu.littleh)
