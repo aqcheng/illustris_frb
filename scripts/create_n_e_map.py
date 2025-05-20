@@ -24,24 +24,38 @@ given in the bottom of this file.
 
 full_snaps = (2, 3, 4, 6, 8, 11, 13, 17, 21, 25, 33, 40, 50, 59, 67, 72, 78, 84, 91, 99)
 
-def sort_chunks_to_bins(sim, snap):
-    
+def sort_chunks_to_bins(sim, snap, density):
+
     full_snap = snap in full_snaps
-    res = np.zeros(sim.n_bins**3, dtype=np.float64)
+
+    simH0 = 100 * u.km/u.s/u.Mpc * sim.h
+    if density:
+        dtype = np.float32
+        pixel_volume = ((sim.binsize * u.kpc / cu.littleh)**3).to(u.cm**3, cu.with_H0(simH0))
+    else:
+        dtype = np.float64
+        pixel_volume = 1.
+    res = np.zeros(sim.n_bins**3, dtype=dtype)
     
-    for chunk in range(len(os.listdir(sim.get_snapdir_path(snap)))):
+    n_bins_padded = sim.n_bins + 1
+    res = np.zeros((n_bins_padded,) * 3, dtype=dtype)
+    res_flat = res.reshape(-1)
+    
+    nchunks = len(os.listdir(sim.get_snapdir_path(snap)))
+    for chunk in range(nchunks):
 
         #process and save the electron number counts + coordinates of all particles
 
         chunk_path = sim.get_snap_chunk_path(snap, chunk)
-
+        
+        print(f"Snapshot {snap}, chunk {chunk} of {nchunks}")
         with h5py.File(chunk_path) as f:
 
             coords = np.array(f['PartType0/Coordinates'])
+            print(coords.shape, np.max(coords, 0), np.min(coords, 0))
 
             #calculate electron number count; N_e = m_g eta_e X_H / m_p
             m_g = (np.array(f['PartType0/Masses'], dtype=np.float64) * 1e10 * u.solMass / cu.littleh)
-            simH0 = 100 * u.km/u.s/u.Mpc * sim.h
             m_g = m_g.to(u.kg, cu.with_H0(simH0))
             eta_e = np.array(f['PartType0/ElectronAbundance'])
 
@@ -52,29 +66,32 @@ def sort_chunks_to_bins(sim, snap):
             else:
                 X_H = (1-np.array(f['PartType0/GFM_Metallicity']))*0.76
 
-        N_e = m_g * eta_e * X_H / const.m_p
+        N_e = m_g * eta_e * X_H / (const.m_p * pixel_volume)
+        N_e = N_e.astype(dtype)
 
-        bin_index = (coords[:,0] // sim.binsize)*sim.n_bins**2 + \
-                    (coords[:,1] // sim.binsize)*sim.n_bins + \
+        bin_index = (coords[:,0] // sim.binsize)*n_bins_padded**2 + \
+                    (coords[:,1] // sim.binsize)*n_bins_padded + \
                     (coords[:,2]  // sim.binsize)
+        bin_index = bin_index.astype(int)
 
-        res += pd.DataFrame({'i': bin_index, 'N_e': N_e}).groupby(by='i').sum().reindex(range(sim.n_bins**3), fill_value=0).to_numpy()[:,0]
-        #creates a {n_bins}^3 long array. each slot has N_e for each corresponding bin
+        np.add.at(res_flat, bin_index, N_e.value)
         
         # mem = process.memory_info().rss/1024**3
         # print(f'{time.time()-start_time:<6.2f}: Done with chunk {chunk}. Current memory: {mem:.1f} GB')
-    print(sim.emap_dir)
+    res = res[:-1,:-1,:-1].reshape(-1)
     np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res)
+
 
 
 #set argparse
 argp = argparse.ArgumentParser()
 argp.add_argument("-s", "--sim", type=str, required=True, choices=os.listdir('/home/tnguser/sims.TNG'), 
                   help="Name of simulation as given in the path, e.g. L205n2500TNG")
-argp.add_argument("--binsize", type=int, default=500, help="The size of a bin in ckpc/h. Default=500")
+argp.add_argument("--binsize", type=float, default=500, help="The size of a bin in ckpc/h. Default=500")
 argp.add_argument("--snaps", type=int, default=[99], nargs='+', help="Which snapshots to process. Default=99")
 argp.add_argument("--snap-range", type=int, nargs=2, help="Range of snapshots to process, inclusive. Ignores --snaps if specified. ")
 argp.add_argument("--outpath", type=str, default='./n_e_maps', help="Path to where the output electron density map will go. If unspecified, will go to ./n_e_maps/{sim}")
+argp.add_argument("--density", action='store_true', default=False, help="Make map in density units of cm^-3 instead of electron number counts. Incompatible with ray tracing code, but more efficient due to reduced memory overflows.")
 args = argp.parse_args()
 
 sim = simulation(args.sim, args.binsize, emap_dir=args.outpath)
@@ -93,7 +110,7 @@ print(f'{sim.n_bins}^3 = {sim.n_bins**3} bins of size {sim.binsize} ckpc/h')
 
 start_time = time.time()
 for snap in snaps_list:
-    sort_chunks_to_bins(sim, snap)
+    sort_chunks_to_bins(sim, snap, args.density)
     print(f'{time.time()-start_time:<6.2f}: Done processing snapshot {snap}')
 
 
