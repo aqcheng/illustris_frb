@@ -36,8 +36,13 @@ def sort_chunks_to_bins(sim, snap, density):
         dtype = np.float64
         pixel_volume = 1.
     res = np.zeros(sim.n_bins**3, dtype=dtype)
-    
-    n_bins_padded = sim.n_bins + 1
+
+    if sim.boxsize % sim.binsize < 1e-5 * sim.binsize:
+        whole_binning = True
+        n_bins_padded = sim.n_bins
+    else:
+        n_bins_padded = sim.n_bins + 1
+
     res = np.zeros((n_bins_padded,) * 3, dtype=dtype)
     res_flat = res.reshape(-1)
     
@@ -68,21 +73,26 @@ def sort_chunks_to_bins(sim, snap, density):
         N_e = m_g * eta_e * X_H / (const.m_p * pixel_volume)
         N_e = N_e.astype(dtype)
 
-        # mod by boxsize seems to be nessisary, since for some reason, 0 < coords <= boxsize.
-        bin_index = ((coords[:,0] % sim.boxsize) // sim.binsize)*n_bins_padded**2 + \
-                    ((coords[:,1] % sim.boxsize) // sim.binsize)*n_bins_padded + \
-                    ((coords[:,2] % sim.boxsize) // sim.binsize)
-        bin_index = bin_index.astype(int)
+        if whole_binning:
+            bin_index = ((coords / sim.boxsize) * n_bins_padded).astype(int) % n_bins_padded
+            bin_index = bin_index[:,0] * n_bins_padded**2 + \
+                        bin_index[:,1] * n_bins_padded + \
+                        bin_index[:,2]
+        else:
+            # mod by boxsize seems to be nessisary, since for some reason, 0 < coords <= boxsize.
+            bin_index = ((coords[:,0] % sim.boxsize) // sim.binsize)*n_bins_padded**2 + \
+                        ((coords[:,1] % sim.boxsize) // sim.binsize)*n_bins_padded + \
+                        ((coords[:,2] % sim.boxsize) // sim.binsize)
+            bin_index = bin_index.astype(int)
 
         np.add.at(res_flat, bin_index, N_e.value)
         
         # mem = process.memory_info().rss/1024**3
         # print(f'{time.time()-start_time:<6.2f}: Done with chunk {chunk}. Current memory: {mem:.1f} GB')
     
-    # Saving the sliced array without flattening prevents a full copy, saving a factor of 2 in memory.
-    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res[:-1,:-1,:-1])
-    #res_flat = res[:-1,:-1,:-1].reshape(-1)
-    #np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res_flat)
+    # Note that the .flatten() costs a factor of 2 in memory when using the padded binning
+    # and the slices is nontrivial.
+    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res[:sim.n_bins,:sim.n_bins,:sim.n_bins].flatten())
 
 
 
@@ -95,9 +105,13 @@ argp.add_argument("--snaps", type=int, default=[99], nargs='+', help="Which snap
 argp.add_argument("--snap-range", type=int, nargs=2, help="Range of snapshots to process, inclusive. Ignores --snaps if specified. ")
 argp.add_argument("--outpath", type=str, default='./n_e_maps', help="Path to where the output electron density map will go. If unspecified, will go to ./n_e_maps/{sim}")
 argp.add_argument("--density", action='store_true', default=False, help="Make map in density units of cm^-3 instead of electron number counts. Incompatible with ray tracing code, but more efficient due to reduced memory overflows.")
+argp.add_argument("--round-binsize", action='store_true', default=False, help="Round the binsize to evenly divide the boxsize.")
 args = argp.parse_args()
 
 sim = simulation(args.sim, args.binsize, emap_dir=args.outpath)
+if args.round_binsize:
+    if sim.boxsize % sim.binsize:
+        sim = simulation(args.sim, sim.boxsize / sim.n_bins, emap_dir=args.outpath)
 
 if args.snap_range is None:
     snaps_list = args.snaps
