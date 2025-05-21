@@ -36,11 +36,12 @@ def sort_chunks_to_bins(sim, snap, density):
         dtype = np.float64
         pixel_volume = 1.
     res = np.zeros(sim.n_bins**3, dtype=dtype)
-
-    if sim.boxsize % sim.binsize < 1e-5 * sim.binsize:
+    
+    if abs((sim.boxsize / sim.binsize + 0.5) % 1 - 0.5) < 1e-5:
         whole_binning = True
         n_bins_padded = sim.n_bins
     else:
+        whole_binning = False
         n_bins_padded = sim.n_bins + 1
 
     res = np.zeros((n_bins_padded,) * 3, dtype=dtype)
@@ -90,9 +91,9 @@ def sort_chunks_to_bins(sim, snap, density):
         # mem = process.memory_info().rss/1024**3
         # print(f'{time.time()-start_time:<6.2f}: Done with chunk {chunk}. Current memory: {mem:.1f} GB')
     
-    # Note that the .flatten() costs a factor of 2 in memory when using the padded binning
+    # Note that the reshape costs a factor of 2 in memory when using the padded binning
     # and the slices is nontrivial.
-    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res[:sim.n_bins,:sim.n_bins,:sim.n_bins].flatten())
+    np.save(os.path.join(sim.emap_dir, f'{snap}.npy'), res[:sim.n_bins,:sim.n_bins,:sim.n_bins].reshape(-1))
 
 
 
