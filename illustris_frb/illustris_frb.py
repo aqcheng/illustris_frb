@@ -63,7 +63,7 @@ class simulation:
         with h5py.File(header_file) as f:
             self.header = dict(f['Header'].attrs)
 
-        self.boxsize = int(self.header['BoxSize'])
+        self.boxsize = self.header['BoxSize']
         self.binsize = binsize
         self.n_bins = int(self.boxsize / self.binsize)
         
